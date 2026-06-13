@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+    <!-- Background Circle -->
+    <circle cx="50" cy="50" r="48" fill="rgba(255, 255, 255, 0.04)" stroke="rgba(255,255,255,0.08)" stroke-width="2"/>
+    
+    <!-- Body -->
+    <rect x="25" y="22" width="50" height="52" rx="25" fill="#facc15"/>
+    
+    <!-- Overalls -->
+    <path d="M 25 55 L 75 55 L 75 72 C 75 73.5 73.5 74 72 74 L 28 74 C 26.5 74 25 73.5 25 72 Z" fill="#2563eb"/>
+    <!-- Strap Left -->
+    <path d="M 25 50 L 37 55 L 34 58 L 25 52 Z" fill="#2563eb"/>
+    <!-- Strap Right -->
+    <path d="M 75 50 L 63 55 L 66 58 L 75 52 Z" fill="#2563eb"/>
+    
+    <!-- Hair -->
+    
+    
+    <!-- Eyes / Goggles -->
+    
+        <!-- Left eye -->
+        <circle cx="38" cy="42" r="11" fill="#fff" stroke="#94a3b8" stroke-width="3"/>
+        <circle cx="38" cy="42" r="3.5" fill="#78350f"/>
+        <!-- Right eye -->
+        <circle cx="62" cy="42" r="11" fill="#fff" stroke="#94a3b8" stroke-width="3"/>
+        <circle cx="62" cy="42" r="3.5" fill="#15803d"/>
+        <!-- Goggle strap -->
+        <rect x="5" y="38" width="90" height="8" rx="2" fill="#1e293b"/>
+      
+    
+    <!-- Mouth -->
+    <path d="M 35 62 Q 50 74 65 62" stroke="#1e293b" stroke-width="4" fill="none" stroke-linecap="round"/>
+
+    <!-- Extra Decorations (Crown, etc.) -->
+    
+        <!-- Crown -->
+        <path d="M 25 22 L 30 5 L 42 14 L 50 2 L 58 14 L 70 5 L 75 22 Z" fill="#eab308" stroke="#ca8a04" stroke-width="2"/>
+        <circle cx="30" cy="4" r="2.5" fill="#ef4444"/>
+        <circle cx="50" cy="1.5" r="3.5" fill="#3b82f6"/>
+        <circle cx="70" cy="4" r="2.5" fill="#ef4444"/>
+        <!-- Crown jewels -->
+        <rect x="35" y="16" width="6" height="4" rx="1" fill="#ef4444"/>
+        <rect x="59" y="16" width="6" height="4" rx="1" fill="#10b981"/>
+      
+  </svg>
