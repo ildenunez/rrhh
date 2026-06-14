@@ -2397,18 +2397,27 @@ export default function Dashboard() {
                     <div className="stats-grid">
                       <div className="glass-panel stat-card info">
                         <span className="stat-title">Total Empleados</span>
-                        <span className="stat-value">{dashboardData.stats?.totalEmployees}</span>
+                        <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem' }}>
+                          <span className="stat-value">{dashboardData.stats?.totalEmployees}</span>
+                          <span style={{ fontSize: '0.9rem', color: 'var(--success)' }}>({dashboardData.stats?.activeEmployees} activos)</span>
+                        </div>
                         <span className="stat-footer">Colaboradores registrados</span>
                       </div>
                       <div className="glass-panel stat-card success">
-                        <span className="stat-title">Total Vacaciones</span>
-                        <span className="stat-value" style={{ color: 'var(--success)' }}>{dashboardData.stats?.totalVacations} días</span>
-                        <span className="stat-footer">Acumulado pendiente</span>
+                        <span className="stat-title">Vacaciones</span>
+                        <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem' }}>
+                          <span className="stat-value" style={{ color: 'var(--success)' }}>{dashboardData.stats?.totalVacationsPending}</span>
+                          <span style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>días</span>
+                        </div>
+                        <span className="stat-footer">Pendientes de consumir</span>
                       </div>
                       <div className="glass-panel stat-card warning">
                         <span className="stat-title">Horas Extras</span>
-                        <span className="stat-value" style={{ color: 'var(--warning)' }}>{dashboardData.stats?.totalExtraHours} hrs</span>
-                        <span className="stat-footer">Registradas totales</span>
+                        <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem' }}>
+                          <span className="stat-value" style={{ color: 'var(--warning)' }}>{dashboardData.stats?.totalExtraHoursPending}</span>
+                          <span style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>hrs</span>
+                        </div>
+                        <span className="stat-footer">Pendientes de consumir</span>
                       </div>
                       <div 
                         className="glass-panel stat-card danger" 
@@ -2754,8 +2763,8 @@ export default function Dashboard() {
                                         absEnd.setHours(0,0,0,0);
 
                                         // Calculate grid positions (1-indexed)
-                                        let startCol = Math.floor((absStart - today) / (1000 * 60 * 60 * 24)) + 1;
-                                        let endCol = Math.floor((absEnd - today) / (1000 * 60 * 60 * 24)) + 2; // +2 because grid end is exclusive
+                                        let startCol = Math.round((absStart - today) / (1000 * 60 * 60 * 24)) + 1;
+                                        let endCol = Math.round((absEnd - today) / (1000 * 60 * 60 * 24)) + 2; // +2 because grid end is exclusive
                                         if (startCol < 1) startCol = 1;
                                         if (endCol > 31) endCol = 31;
                                         if (startCol >= endCol) return null;
@@ -2772,7 +2781,6 @@ export default function Dashboard() {
                                               position: 'absolute',
                                               top: `${4 + absIdx * 18}px`,
                                               height: '15px',
-                                              gridColumn: `${startCol} / ${endCol}`,
                                               left: `${((startCol - 1) / 30) * 100}%`,
                                               width: `${(totalDays / 30) * 100}%`,
                                               background: `linear-gradient(135deg, ${barColor}, ${barColor}dd)`,

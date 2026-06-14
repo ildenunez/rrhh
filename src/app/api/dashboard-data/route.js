@@ -238,7 +238,19 @@ export async function GET(request) {
 
     } else if (currentUser.role === 'admin') {
       // 3. Admin view
-      const statsEmp = await query(`SELECT COUNT(*) as total_employees, COALESCE(SUM(vacation_days), 0) as total_vacations, COALESCE(SUM(extra_hours), 0) as total_extra_hours FROM employees`);
+      const statsEmp = await query(`
+        SELECT 
+          COUNT(*) as total_employees, 
+          COALESCE(SUM(vacation_days), 0) as total_vacations_pending, 
+          COALESCE(SUM(extra_hours), 0) as total_extra_hours_pending 
+        FROM employees
+      `);
+      const statsTime = await query(`
+        SELECT 
+          COALESCE(SUM(CASE WHEN type IN ('add_vacation', 'manual_add_vacation') THEN amount ELSE 0 END), 0) as total_vacations_granted,
+          COALESCE(SUM(CASE WHEN type IN ('add_extra_hours', 'manual_add_extra_hours', 'extra_hours_worked') THEN amount ELSE 0 END), 0) as total_extra_hours_granted
+        FROM time_records
+      `);
       const statsDept = await query(`SELECT COUNT(*) as total_departments FROM departments`);
       const statsPendingReqs = await query(`SELECT COUNT(*) as total_pending FROM requests WHERE status = 'pending'`);
       const statsSickLeave = await query(`
@@ -320,12 +332,18 @@ export async function GET(request) {
         ORDER BY tr.created_at DESC
       `);
 
+      const totalEmp = parseInt(statsEmp.rows[0].total_employees);
+      const activeEmp = totalEmp - statsSickLeave.rows.length;
+
       dashboardData = {
         ...dashboardData,
         stats: {
-          totalEmployees: parseInt(statsEmp.rows[0].total_employees),
-          totalVacations: parseInt(statsEmp.rows[0].total_vacations),
-          totalExtraHours: parseFloat(statsEmp.rows[0].total_extra_hours || 0).toFixed(1),
+          totalEmployees: totalEmp,
+          activeEmployees: activeEmp,
+          totalVacationsPending: parseInt(statsEmp.rows[0].total_vacations_pending),
+          totalVacationsGranted: parseInt(statsTime.rows[0].total_vacations_granted),
+          totalExtraHoursPending: parseFloat(statsEmp.rows[0].total_extra_hours_pending || 0).toFixed(1),
+          totalExtraHoursGranted: parseFloat(statsTime.rows[0].total_extra_hours_granted || 0).toFixed(1),
           totalDepartments: parseInt(statsDept.rows[0].total_departments),
           totalPendingRequests: parseInt(statsPendingReqs.rows[0].total_pending),
           totalSickLeave: statsSickLeave.rows.length
