@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 
 export default function Dashboard() {
   const [usersList, setUsersList] = useState([]);
@@ -2511,7 +2511,7 @@ export default function Dashboard() {
                     </div>
                   )}
 
-                  {/* UPCOMING ABSENCES CARD FOR ADMIN & COORDINATOR */}
+                  {/* UPCOMING ABSENCES GANTT CHART FOR ADMIN & COORDINATOR */}
                   {(dashboardData.user.role === 'admin' || dashboardData.user.role === 'coordinator') && (() => {
                     const rawRequests = dashboardData.user.role === 'admin'
                       ? [
@@ -2544,74 +2544,270 @@ export default function Dashboard() {
                       })
                       .sort((a, b) => new Date(a.start_date) - new Date(b.start_date));
 
+                    // Build 30 day columns
+                    const ganttDays = [];
+                    for (let i = 0; i < 30; i++) {
+                      const d = new Date(today);
+                      d.setDate(today.getDate() + i);
+                      ganttDays.push(d);
+                    }
+
+                    // Group by employee
+                    const empAbsMap = {};
+                    upcomingAbsences.forEach(abs => {
+                      const eid = abs.employee_id;
+                      if (!empAbsMap[eid]) {
+                        const empInfo = (dashboardData.allEmployees || []).find(e => e.id === eid) ||
+                                        (dashboardData.managedEmployees || []).find(e => e.id === eid) ||
+                                        (dashboardData.allUsers || []).find(e => e.id === eid);
+                        empAbsMap[eid] = {
+                          id: eid,
+                          name: abs.employee_name || empInfo?.name || 'Desconocido',
+                          avatar: empInfo?.avatar_url || null,
+                          dept: empInfo?.department_name || 'Sin departamento',
+                          absences: []
+                        };
+                      }
+                      empAbsMap[eid].absences.push(abs);
+                    });
+                    const empRows = Object.values(empAbsMap).sort((a, b) => {
+                      const aIsBaja = a.absences.some(ab => ab.absence_type_name && ab.absence_type_name.toLowerCase().includes('baja'));
+                      const bIsBaja = b.absences.some(ab => ab.absence_type_name && ab.absence_type_name.toLowerCase().includes('baja'));
+                      if (aIsBaja !== bIsBaja) return aIsBaja ? 1 : -1;
+                      const aStart = Math.min(...a.absences.map(ab => new Date(ab.start_date).getTime()));
+                      const bStart = Math.min(...b.absences.map(ab => new Date(ab.start_date).getTime()));
+                      return aStart - bStart;
+                    });
+
+                    // Absence type color palette
+                    const absTypeColors = {
+                      'Vacaciones': '#10b981',
+                      'Baja Médica': '#ef4444',
+                      'Baja': '#ef4444',
+                      'Asuntos Propios': '#f59e0b',
+                      'Permiso': '#3b82f6',
+                      'Maternidad': '#ec4899',
+                      'Paternidad': '#8b5cf6',
+                    };
+                    const getAbsColor = (typeName) => {
+                      if (!typeName) return '#6366f1';
+                      for (const [key, color] of Object.entries(absTypeColors)) {
+                        if (typeName.toLowerCase().includes(key.toLowerCase())) return color;
+                      }
+                      return '#6366f1';
+                    };
+
+                    // Get unique legend items
+                    const legendTypes = [...new Set(upcomingAbsences.map(a => a.absence_type_name || 'Ausencia'))];
+
                     return (
                       <div className="glass-panel" style={{ padding: '1.5rem', marginBottom: '1.5rem' }}>
-                        <div className="panel-header" style={{ padding: '0 0 1rem 0', marginBottom: '1rem', borderBottom: '1px solid var(--border-color)' }}>
+                        <div className="panel-header" style={{ padding: '0 0 1rem 0', marginBottom: '1rem', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
                           <h2 className="panel-title" style={{ margin: 0, fontSize: '1.2rem', color: 'var(--primary-light)' }}>
-                            🌴 Próximas Ausencias de tus equipos (Próximos 30 días)
+                            🌴 Calendario de Ausencias (Próximos 30 días)
                           </h2>
+                          {legendTypes.length > 0 && (
+                            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                              {legendTypes.map(t => (
+                                <div key={t} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                                  <span style={{ width: '10px', height: '10px', borderRadius: '3px', background: getAbsColor(t), display: 'inline-block', flexShrink: 0 }}></span>
+                                  {t}
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
                         <div className="panel-body" style={{ padding: 0 }}>
-                          {upcomingAbsences.length === 0 ? (
+                          {empRows.length === 0 ? (
                             <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '1.5rem', margin: 0, fontStyle: 'italic' }}>
                               No hay ausencias planificadas ni vacaciones aprobadas para los próximos 30 días.
                             </p>
                           ) : (
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1rem' }}>
-                              {upcomingAbsences.map(abs => {
-                                const empInfo = (dashboardData.allEmployees || []).find(e => e.id === abs.employee_id) || 
-                                                (dashboardData.managedEmployees || []).find(e => e.id === abs.employee_id) ||
-                                                (dashboardData.allUsers || []).find(e => e.id === abs.employee_id);
-                                const avatar = empInfo?.avatar_url;
-                                const deptName = empInfo?.department_name || 'Sin departamento';
+                            <div style={{ overflowX: 'auto' }}>
+                              <div style={{ display: 'grid', gridTemplateColumns: '180px 1fr', minWidth: `${180 + 30 * 32}px` }}>
+                                {/* HEADER ROW */}
+                                <div style={{
+                                  position: 'sticky',
+                                  left: 0,
+                                  zIndex: 5,
+                                  background: 'var(--bg-modal)',
+                                  borderBottom: '2px solid var(--border-color)',
+                                  borderRight: '2px solid var(--border-color)',
+                                  padding: '0.5rem 0.75rem',
+                                  fontSize: '0.75rem',
+                                  fontWeight: '700',
+                                  color: 'var(--text-secondary)',
+                                  display: 'flex',
+                                  alignItems: 'flex-end'
+                                }}>
+                                  Empleado
+                                </div>
+                                <div style={{
+                                  display: 'grid',
+                                  gridTemplateColumns: `repeat(30, 1fr)`,
+                                  borderBottom: '2px solid var(--border-color)',
+                                }}>
+                                  {ganttDays.map((d, i) => {
+                                    const isWeekend = d.getDay() === 0 || d.getDay() === 6;
+                                    const isToday = d.toDateString() === new Date().toDateString();
+                                    const dayNames = ['D', 'L', 'M', 'X', 'J', 'V', 'S'];
+                                    return (
+                                      <div
+                                        key={i}
+                                        style={{
+                                          textAlign: 'center',
+                                          padding: '0.25rem 0',
+                                          fontSize: '0.6rem',
+                                          fontWeight: isToday ? '800' : '500',
+                                          color: isToday ? '#fff' : (isWeekend ? 'var(--text-muted)' : 'var(--text-secondary)'),
+                                          background: isToday ? 'var(--primary)' : (isWeekend ? 'rgba(255,255,255,0.02)' : 'transparent'),
+                                          borderLeft: i > 0 ? '1px solid rgba(255,255,255,0.04)' : 'none',
+                                          borderRadius: isToday ? '4px' : '0',
+                                          lineHeight: '1.3',
+                                          display: 'flex',
+                                          flexDirection: 'column',
+                                          alignItems: 'center',
+                                          justifyContent: 'flex-end',
+                                        }}
+                                        title={d.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' })}
+                                      >
+                                        <span style={{ opacity: 0.7 }}>{dayNames[d.getDay()]}</span>
+                                        <span style={{ fontWeight: '700', fontSize: '0.7rem' }}>{d.getDate()}</span>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
 
-                                return (
-                                  <div 
-                                    key={abs.id} 
-                                    className="glass-panel" 
-                                    style={{ 
-                                      padding: '1rem', 
-                                      background: 'rgba(255,255,255,0.02)', 
-                                      display: 'flex', 
-                                      gap: '0.75rem', 
-                                      alignItems: 'center', 
-                                      borderLeft: '4px solid var(--primary)',
-                                      transition: 'transform 0.2s ease',
-                                    }}
-                                  >
-                                    <div style={{ flexShrink: 0 }}>
-                                      {avatar ? (
-                                        <img 
-                                          src={avatar} 
-                                          alt={abs.employee_name} 
-                                          style={{ width: '40px', height: '40px', borderRadius: '50%', objectFit: 'cover', border: '1px solid var(--border-color)' }} 
+                                {/* EMPLOYEE ROWS */}
+                                {empRows.map((emp, rowIdx) => (
+                                  <React.Fragment key={emp.id}>
+                                    {/* Employee name cell */}
+                                    <div style={{
+                                      position: 'sticky',
+                                      left: 0,
+                                      zIndex: 4,
+                                      background: 'var(--bg-modal)',
+                                      borderBottom: '1px solid var(--border-color)',
+                                      borderRight: '2px solid var(--border-color)',
+                                      padding: '0.5rem 0.6rem',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      gap: '0.5rem',
+                                    }}>
+                                      {emp.avatar ? (
+                                        <img
+                                          src={emp.avatar}
+                                          alt={emp.name}
+                                          style={{ width: '28px', height: '28px', borderRadius: '50%', objectFit: 'cover', border: '1px solid var(--border-color)', flexShrink: 0 }}
                                         />
                                       ) : (
-                                        <div style={{ width: '40px', height: '40px', borderRadius: '50%', background: 'linear-gradient(135deg, var(--primary), var(--info))', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', color: '#fff', fontSize: '0.9rem' }}>
-                                          {abs.employee_name ? abs.employee_name.charAt(0) : '?'}
+                                        <div style={{
+                                          width: '28px', height: '28px', borderRadius: '50%',
+                                          background: `linear-gradient(135deg, ${getAbsColor(emp.absences[0]?.absence_type_name)}, var(--primary))`,
+                                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                          fontWeight: 'bold', color: '#fff', fontSize: '0.7rem', flexShrink: 0
+                                        }}>
+                                          {emp.name.charAt(0)}
                                         </div>
                                       )}
-                                    </div>
-                                    <div style={{ minWidth: 0, flex: 1 }}>
-                                      <div style={{ fontWeight: '600', fontSize: '0.9rem', color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                        {abs.employee_name}
-                                      </div>
-                                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                        {deptName}
-                                      </div>
-                                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.35rem', flexWrap: 'wrap' }}>
-                                        <span className="badge" style={{ backgroundColor: 'rgba(139, 92, 246, 0.1)', color: 'var(--primary-light)', fontSize: '0.65rem', padding: '0.1rem 0.4rem', border: '1px solid rgba(139, 92, 246, 0.2)' }}>
-                                          {abs.absence_type_name || 'Ausencia'}
-                                        </span>
-                                        <span style={{ fontSize: '0.75rem', fontWeight: '500', color: 'var(--text-secondary)' }}>
-                                          📅 {new Date(abs.start_date).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}
-                                          {abs.end_date && abs.end_date !== abs.start_date && ` - ${new Date(abs.end_date).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}`}
-                                        </span>
+                                      <div style={{ minWidth: 0 }}>
+                                        <div style={{ fontWeight: '600', fontSize: '0.8rem', color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                          {emp.name}
+                                        </div>
+                                        <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                          {emp.dept}
+                                        </div>
                                       </div>
                                     </div>
-                                  </div>
-                                );
-                              })}
+
+                                    {/* Gantt bar cells */}
+                                    <div style={{
+                                      display: 'grid',
+                                      gridTemplateColumns: `repeat(30, 1fr)`,
+                                      borderBottom: '1px solid var(--border-color)',
+                                      position: 'relative',
+                                    }}>
+                                      {/* Background day cells */}
+                                      {ganttDays.map((d, i) => {
+                                        const isWeekend = d.getDay() === 0 || d.getDay() === 6;
+                                        const isToday = d.toDateString() === new Date().toDateString();
+                                        return (
+                                          <div
+                                            key={i}
+                                            style={{
+                                              height: '100%',
+                                              minHeight: '40px',
+                                              background: isToday
+                                                ? 'rgba(139, 92, 246, 0.08)'
+                                                : (isWeekend ? 'rgba(255,255,255,0.02)' : 'transparent'),
+                                              borderLeft: i > 0 ? '1px solid rgba(255,255,255,0.04)' : 'none',
+                                            }}
+                                          ></div>
+                                        );
+                                      })}
+
+                                      {/* Absence bars overlaid on top */}
+                                      {emp.absences.map((abs, absIdx) => {
+                                        const absStart = new Date(abs.start_date);
+                                        absStart.setHours(0,0,0,0);
+                                        const absEnd = abs.end_date ? new Date(abs.end_date) : new Date(absStart);
+                                        absEnd.setHours(0,0,0,0);
+
+                                        // Calculate grid positions (1-indexed)
+                                        let startCol = Math.floor((absStart - today) / (1000 * 60 * 60 * 24)) + 1;
+                                        let endCol = Math.floor((absEnd - today) / (1000 * 60 * 60 * 24)) + 2; // +2 because grid end is exclusive
+                                        if (startCol < 1) startCol = 1;
+                                        if (endCol > 31) endCol = 31;
+                                        if (startCol >= endCol) return null;
+
+                                        const barColor = getAbsColor(abs.absence_type_name);
+                                        const totalDays = endCol - startCol;
+                                        const label = abs.absence_type_name || 'Ausencia';
+
+                                        return (
+                                          <div
+                                            key={abs.id}
+                                            title={`${abs.employee_name}: ${label}\n${new Date(abs.start_date).toLocaleDateString('es-ES')} - ${abs.end_date ? new Date(abs.end_date).toLocaleDateString('es-ES') : new Date(abs.start_date).toLocaleDateString('es-ES')}`}
+                                            style={{
+                                              position: 'absolute',
+                                              top: `${4 + absIdx * 18}px`,
+                                              height: '15px',
+                                              gridColumn: `${startCol} / ${endCol}`,
+                                              left: `${((startCol - 1) / 30) * 100}%`,
+                                              width: `${(totalDays / 30) * 100}%`,
+                                              background: `linear-gradient(135deg, ${barColor}, ${barColor}dd)`,
+                                              borderRadius: '4px',
+                                              display: 'flex',
+                                              alignItems: 'center',
+                                              justifyContent: 'center',
+                                              overflow: 'hidden',
+                                              boxShadow: `0 1px 4px ${barColor}55`,
+                                              cursor: 'default',
+                                              zIndex: 2,
+                                              transition: 'transform 0.15s ease, box-shadow 0.15s ease',
+                                            }}
+                                            onMouseEnter={e => { e.currentTarget.style.transform = 'scaleY(1.3)'; e.currentTarget.style.boxShadow = `0 2px 8px ${barColor}88`; }}
+                                            onMouseLeave={e => { e.currentTarget.style.transform = 'scaleY(1)'; e.currentTarget.style.boxShadow = `0 1px 4px ${barColor}55`; }}
+                                          >
+                                            <span style={{
+                                              fontSize: '0.55rem',
+                                              fontWeight: '700',
+                                              color: '#fff',
+                                              textShadow: '0 1px 2px rgba(0,0,0,0.3)',
+                                              whiteSpace: 'nowrap',
+                                              overflow: 'hidden',
+                                              textOverflow: 'ellipsis',
+                                              padding: '0 4px',
+                                            }}>
+                                              {totalDays >= 2 ? label : label.charAt(0)}
+                                            </span>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  </React.Fragment>
+                                ))}
+                              </div>
                             </div>
                           )}
                         </div>
