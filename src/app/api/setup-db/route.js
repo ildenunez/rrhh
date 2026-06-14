@@ -123,6 +123,34 @@ export async function GET() {
       );
     `);
 
+    // Create email_notification_settings table
+    await query(`
+      CREATE TABLE IF NOT EXISTS email_notification_settings (
+        id SERIAL PRIMARY KEY,
+        event_key VARCHAR(100) UNIQUE NOT NULL,
+        event_name VARCHAR(150) NOT NULL,
+        notify_employee BOOLEAN NOT NULL DEFAULT TRUE,
+        notify_coordinator BOOLEAN NOT NULL DEFAULT TRUE,
+        notify_admin BOOLEAN NOT NULL DEFAULT TRUE
+      );
+    `);
+
+    // Seed default email notification settings if empty
+    const emailSettingsCount = await query(`SELECT COUNT(*) FROM email_notification_settings;`);
+    if (parseInt(emailSettingsCount.rows[0].count) === 0) {
+      await query(`
+        INSERT INTO email_notification_settings (event_key, event_name, notify_employee, notify_coordinator, notify_admin)
+        VALUES 
+          ('request_created', 'Nueva solicitud de ausencia/horas', TRUE, TRUE, TRUE),
+          ('request_resolved', 'Solicitud aprobada o rechazada', TRUE, FALSE, FALSE),
+          ('shift_changed', 'Asignación o cambio de turno', TRUE, FALSE, FALSE),
+          ('epi_requested', 'Nueva solicitud de EPI', FALSE, TRUE, TRUE),
+          ('epi_delivered', 'Entrega de EPI registrada', TRUE, FALSE, FALSE),
+          ('announcement_created', 'Nuevo comunicado publicado en el muro', TRUE, TRUE, TRUE)
+        ON CONFLICT (event_key) DO NOTHING;
+      `);
+    }
+
     // Create epi_types table
     await query(`
       CREATE TABLE IF NOT EXISTS epi_types (

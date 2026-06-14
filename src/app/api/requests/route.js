@@ -141,6 +141,9 @@ export async function POST(request) {
       await createApprovedTransactionLogs(newRequest, resolvedBy || parsedEmployeeId);
     }
 
+    // Trigger email simulation
+    await checkAndSimulateEmail('request_created', newRequest);
+
     return NextResponse.json({ success: true, request: newRequest });
   } catch (error) {
     console.error('Error posting request:', error);
@@ -183,6 +186,10 @@ export async function PUT(request) {
         WHERE id = $2
         RETURNING *
       `, [parsedResolvedBy, parsedId, updatedObservation]);
+
+      // Trigger email simulation
+      await checkAndSimulateEmail('request_resolved', updateRes.rows[0]);
+
       return NextResponse.json({ success: true, request: updateRes.rows[0] });
     }
 
@@ -198,6 +205,9 @@ export async function PUT(request) {
       WHERE id = $2
       RETURNING *
     `, [parsedResolvedBy, parsedId, updatedObservation]);
+
+    // Trigger email simulation
+    await checkAndSimulateEmail('request_resolved', updateRes.rows[0]);
 
     return NextResponse.json({ success: true, request: updateRes.rows[0] });
   } catch (error) {
@@ -349,5 +359,48 @@ async function createApprovedTransactionLogs(req, resolverId) {
         VALUES ($1, $2, 'extra_hours', $3, 0.00, $4)
       `, [empId, resolverId, -absHours, desc]);
     }
+  }
+}
+
+// Helper: Simulate email notification check and log it
+async function checkAndSimulateEmail(eventKey, requestDetails) {
+  try {
+    // 1. Check if the request is an absence of type 'baja'
+    if (requestDetails.type === 'absence' && requestDetails.absence_type_id) {
+      const absTypeRes = await query(`SELECT name FROM absence_types WHERE id = $1`, [requestDetails.absence_type_id]);
+      if (absTypeRes.rows.length > 0) {
+        const name = absTypeRes.rows[0].name.toLowerCase();
+        if (name.includes('baja')) {
+          console.log(`[Email Sim] Solicitud de BAJA detectada (ID: ${requestDetails.id}). Correo omitido para todos los roles.`);
+          return;
+        }
+      }
+    }
+
+    // 2. Fetch email settings
+    const settingsRes = await query(`SELECT * FROM email_notification_settings WHERE event_key = $1`, [eventKey]);
+    if (settingsRes.rows.length === 0) return;
+
+    const setting = settingsRes.rows[0];
+    
+    // Fetch employee details
+    const empRes = await query(`SELECT name, email, role FROM employees WHERE id = $1`, [requestDetails.employee_id]);
+    if (empRes.rows.length === 0) return;
+    const employee = empRes.rows[0];
+
+    console.log(`\n--- [Simulación de Envío de Email para evento: ${setting.event_name}] ---`);
+    if (setting.notify_employee) {
+      console.log(`Para Empleado (${employee.name} - ${employee.email}): "Hola ${employee.name}, se ha notificado la novedad de tu solicitud."`);
+    }
+    if (setting.notify_coordinator) {
+      console.log(`Para Coordinadores: "Novedad en la solicitud del empleado ${employee.name}."`);
+    }
+    if (setting.notify_admin) {
+      console.log(`Para Administradores: "Novedad en la solicitud del empleado ${employee.name}."`);
+    }
+    console.log(`--------------------------------------------------------------------\n`);
+
+  } catch (err) {
+    console.error("Error in checkAndSimulateEmail:", err);
   }
 }

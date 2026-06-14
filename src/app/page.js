@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 
 export default function Dashboard() {
   const [usersList, setUsersList] = useState([]);
@@ -8,6 +8,30 @@ export default function Dashboard() {
   const [dashboardData, setDashboardData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+
+  // Authentication states
+  const [loggedInUser, setLoggedInUser] = useState(null);
+  const [loginEmail, setLoginEmail] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginError, setLoginError] = useState(null);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+
+  // Iniciar Año modal states
+  const [showInitYearModal, setShowInitYearModal] = useState(false);
+  const [initYearSelected, setInitYearSelected] = useState((new Date().getFullYear() + 1).toString());
+  const [initYearStep, setInitYearStep] = useState(1); // 1 = select year, 2 = preview
+  const [isInitializingYear, setIsInitializingYear] = useState(false);
+
+  // Email notifications settings state
+  const [emailSettings, setEmailSettings] = useState([]);
+
+  // Confirm adjustment modal states
+  const [showConfirmAdjustmentModal, setShowConfirmAdjustmentModal] = useState(false);
+  const [pendingAdjustment, setPendingAdjustment] = useState(null);
+  const [adjustmentObservation, setAdjustmentObservation] = useState('');
+  const [historyYearFilter, setHistoryYearFilter] = useState('all');
+
+
 
   // Tab view controller: 'dashboard' | 'admin_employees' | 'admin_departments' | 'admin_absence_types'
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -40,6 +64,46 @@ export default function Dashboard() {
     password: '',
     managed_department_ids: []
   });
+
+  // Memoized history records with running balances calculated backwards from current balance
+  const processedTimeRecords = useMemo(() => {
+    if (!editingEmployee) return [];
+    
+    let runningVacation = parseFloat(empForm.vacation_days || 0);
+    let runningHours = parseFloat(empForm.extra_hours || 0);
+
+    return employeeTimeRecords.map(rec => {
+      const amountVal = parseFloat(rec.amount);
+      const isVacation = rec.type === 'vacation';
+
+      const balanceAfter = isVacation ? runningVacation : runningHours;
+      const balanceBefore = balanceAfter - amountVal;
+
+      if (isVacation) {
+        runningVacation = balanceBefore;
+      } else {
+        runningHours = balanceBefore;
+      }
+
+      return {
+        ...rec,
+        balanceBefore: balanceBefore,
+        balanceAfter: balanceAfter
+      };
+    });
+  }, [employeeTimeRecords, editingEmployee, empForm]);
+
+  // Memoized filtered history records by selected year
+  const filteredTimeRecords = useMemo(() => {
+    if (historyYearFilter === 'all') return processedTimeRecords;
+    return processedTimeRecords.filter(rec => new Date(rec.created_at).getFullYear().toString() === historyYearFilter);
+  }, [processedTimeRecords, historyYearFilter]);
+
+  // Memoized unique years from history
+  const uniqueYears = useMemo(() => {
+    const years = processedTimeRecords.map(rec => new Date(rec.created_at).getFullYear().toString());
+    return ['all', ...Array.from(new Set(years)).sort((a, b) => b.localeCompare(a))];
+  }, [processedTimeRecords]);
 
   const [deptForm, setDeptForm] = useState({
     name: '',
@@ -218,6 +282,14 @@ export default function Dashboard() {
   const [isPlanningEditMode, setIsPlanningEditMode] = useState(false);
   const [backupShiftAssignments, setBackupShiftAssignments] = useState(null);
   const [schedDeptFilter, setSchedDeptFilter] = useState('');
+  // Employee order for planning grid (persisted in localStorage)
+  const [planningEmployeeOrder, setPlanningEmployeeOrder] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('planningEmployeeOrder') || '[]'); } catch { return []; }
+  });
+  const [backupPlanningOrder, setBackupPlanningOrder] = useState(null);
+  // Drag-and-drop state for row reordering
+  const dragRowRef = useRef(null);
+  const dragOverRowRef = useRef(null);
   const [settingsTab, setSettingsTab] = useState('employees'); // 'employees' | 'departments' | 'absence_types' | 'shifts'
   // Reset all filters when active tab or settings tab changes
   useEffect(() => {
@@ -236,7 +308,17 @@ export default function Dashboard() {
         const data = await res.json();
         if (data.allUsers && data.allUsers.length > 0) {
           setUsersList(data.allUsers);
-          setSelectedUserId(data.allUsers[0].id.toString());
+          
+          // Check localStorage for loggedInUser
+          const storedUser = localStorage.getItem('loggedInUser');
+          if (storedUser) {
+            const parsedUser = JSON.parse(storedUser);
+            setLoggedInUser(parsedUser);
+            setSelectedUserId(parsedUser.id.toString());
+          } else {
+            // No user logged in yet, don't auto-set selectedUserId to load dashboard
+            setLoading(false);
+          }
         } else {
           setError("No se encontraron usuarios en la base de datos.");
         }
@@ -246,6 +328,127 @@ export default function Dashboard() {
     }
     initData();
   }, []);
+
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    setLoginError(null);
+    setIsLoggingIn(true);
+    try {
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: loginEmail, password: loginPassword })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Credenciales inválidas');
+      }
+      if (data.success && data.user) {
+        localStorage.setItem('loggedInUser', JSON.stringify(data.user));
+        setLoggedInUser(data.user);
+        setSelectedUserId(data.user.id.toString());
+        setLoginEmail('');
+        setLoginPassword('');
+      }
+    } catch (err) {
+      setLoginError(err.message);
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('loggedInUser');
+    setLoggedInUser(null);
+    setSelectedUserId('');
+    setDashboardData(null);
+  };
+
+  const openInitYearModal = () => {
+    setInitYearSelected((new Date().getFullYear() + 1).toString());
+    setInitYearStep(1);
+    setShowInitYearModal(true);
+  };
+
+  const handleInitYearNext = (e) => {
+    e.preventDefault();
+    if (!initYearSelected) {
+      alert("Por favor introduce un año válido.");
+      return;
+    }
+    setInitYearStep(2);
+  };
+
+  const confirmInitYear = async () => {
+    setIsInitializingYear(true);
+    try {
+      const res = await fetch('/api/init-year', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          year: initYearSelected,
+          created_by: loggedInUser?.id
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Error al iniciar el año');
+      }
+      alert(data.message);
+      setShowInitYearModal(false);
+      await refreshData();
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setIsInitializingYear(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'admin_settings' && settingsTab === 'notifications') {
+      fetchEmailSettings();
+    }
+  }, [activeTab, settingsTab]);
+
+  const fetchEmailSettings = async () => {
+    try {
+      const res = await fetch('/api/email-settings');
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        setEmailSettings(data);
+      }
+    } catch (err) {
+      console.error("Error loading email settings:", err);
+    }
+  };
+
+  const handleEmailSettingChange = (eventKey, roleKey, value) => {
+    setEmailSettings(prev => prev.map(s => {
+      if (s.event_key === eventKey) {
+        return { ...s, [roleKey]: value };
+      }
+      return s;
+    }));
+  };
+
+  const saveEmailSettings = async (e) => {
+    e.preventDefault();
+    try {
+      const res = await fetch('/api/email-settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(emailSettings)
+      });
+      const data = await res.json();
+      if (data.success) {
+        alert("Configuración de notificaciones guardada con éxito.");
+      } else {
+        alert(data.error || "Error al guardar la configuración.");
+      }
+    } catch (err) {
+      alert(err.message);
+    }
+  };
 
   // Fetch full data whenever selected user changes
   useEffect(() => {
@@ -1140,6 +1343,7 @@ export default function Dashboard() {
 
   const handleStartPlanningEdit = () => {
     setBackupShiftAssignments(JSON.parse(JSON.stringify(shiftAssignments)));
+    setBackupPlanningOrder([...planningEmployeeOrder]);
     setIsPlanningEditMode(true);
   };
 
@@ -1147,8 +1351,12 @@ export default function Dashboard() {
     if (backupShiftAssignments) {
       setShiftAssignments(backupShiftAssignments);
     }
+    if (backupPlanningOrder !== null) {
+      setPlanningEmployeeOrder(backupPlanningOrder);
+    }
     setIsPlanningEditMode(false);
     setBackupShiftAssignments(null);
+    setBackupPlanningOrder(null);
   };
 
   const handleSavePlanningEdit = async () => {
@@ -1170,9 +1378,13 @@ export default function Dashboard() {
       }
     }
 
+    // Persist employee order to localStorage
+    try { localStorage.setItem('planningEmployeeOrder', JSON.stringify(planningEmployeeOrder)); } catch {}
+
     if (assignmentsToSend.length === 0) {
       setIsPlanningEditMode(false);
       setBackupShiftAssignments(null);
+      setBackupPlanningOrder(null);
       return;
     }
 
@@ -1189,6 +1401,7 @@ export default function Dashboard() {
       if (data.success) {
         setIsPlanningEditMode(false);
         setBackupShiftAssignments(null);
+        setBackupPlanningOrder(null);
       } else {
         alert("Error al guardar la planificación: " + data.error);
       }
@@ -1303,28 +1516,43 @@ export default function Dashboard() {
 
   const saveTimeAdjustment = async (e) => {
     e.preventDefault();
-    try {
-      const res = await fetch('/api/time-records', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          employee_id: selectedTimeEmployee.id,
-          created_by: dashboardData.user.id,
-          type: timeForm.type,
-          amount: timeForm.amount,
-          observation: timeForm.observation,
-          action: 'adjust'
-        })
-      });
-
-      const resData = await res.json();
-      if (!res.ok) throw new Error(resData.error || "Error al registrar ajuste");
-      
-      setTimeForm({ ...timeForm, amount: '', observation: '' });
-      await refreshData();
-    } catch (err) {
-      alert(err.message);
+    if (!timeForm.amount || isNaN(parseFloat(timeForm.amount)) || parseFloat(timeForm.amount) === 0) {
+      alert("Por favor introduce una cantidad válida.");
+      return;
     }
+    
+    setPendingAdjustment({
+      employeeId: selectedTimeEmployee.id,
+      employeeName: selectedTimeEmployee.name,
+      type: timeForm.type,
+      amount: parseFloat(timeForm.amount),
+      observation: timeForm.observation,
+      onConfirm: async () => {
+        try {
+          const res = await fetch('/api/time-records', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              employee_id: selectedTimeEmployee.id,
+              created_by: dashboardData.user.id,
+              type: timeForm.type,
+              amount: timeForm.amount,
+              observation: timeForm.observation,
+              action: 'adjust'
+            })
+          });
+
+          const resData = await res.json();
+          if (!res.ok) throw new Error(resData.error || "Error al registrar ajuste");
+          
+          setTimeForm({ ...timeForm, amount: '', observation: '' });
+          await refreshData();
+        } catch (err) {
+          alert(err.message);
+        }
+      }
+    });
+    setShowConfirmAdjustmentModal(true);
   };
 
   const deleteTimeRecord = async (recordId) => {
@@ -1574,6 +1802,167 @@ export default function Dashboard() {
     ];
     return months[monthIndex];
   };
+
+  if (!loggedInUser) {
+    return (
+      <div style={{
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        minHeight: '100vh',
+        background: isLightTheme 
+          ? 'radial-gradient(circle at 10% 20%, rgba(241, 245, 249, 1) 0%, rgba(226, 232, 240, 1) 90%)'
+          : 'radial-gradient(circle at 10% 20%, rgba(15, 23, 42, 1) 0%, rgba(9, 15, 29, 1) 90%)',
+        color: 'var(--text-primary)',
+        fontFamily: 'var(--font-sans, system-ui, sans-serif)',
+        padding: '1.5rem',
+        boxSizing: 'border-box'
+      }}>
+        <div className="glass-panel" style={{
+          maxWidth: '420px',
+          width: '100%',
+          padding: '2.5rem',
+          borderRadius: '24px',
+          boxShadow: '0 20px 40px rgba(0,0,0,0.3)',
+          border: '1px solid var(--border-color)',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '1.75rem',
+          backgroundColor: isLightTheme ? 'rgba(255, 255, 255, 0.7)' : 'rgba(15, 23, 42, 0.65)',
+          backdropFilter: 'blur(20px)',
+          textAlign: 'center'
+        }}>
+          {/* Logo / Header */}
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.75rem' }}>
+            <div style={{
+              width: '60px',
+              height: '60px',
+              borderRadius: '16px',
+              background: 'linear-gradient(135deg, var(--primary-light, #818cf8), var(--primary, #4f46e5))',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: '2rem',
+              color: '#fff',
+              boxShadow: '0 8px 16px rgba(79, 70, 229, 0.3)'
+            }}>
+              💼
+            </div>
+            <h2 style={{ fontSize: '1.8rem', fontWeight: '800', margin: 0, letterSpacing: '-0.5px' }}>
+              Portal RRHH
+            </h2>
+            <p style={{ fontSize: '0.88rem', color: 'var(--text-secondary)', margin: 0 }}>
+              Ingresa tus credenciales para acceder al sistema
+            </p>
+          </div>
+
+          <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', textAlign: 'left' }}>
+            {loginError && (
+              <div style={{
+                backgroundColor: 'rgba(239, 68, 68, 0.12)',
+                border: '1px solid rgba(239, 68, 68, 0.3)',
+                color: 'var(--danger, #ef4444)',
+                padding: '0.75rem 1rem',
+                borderRadius: '12px',
+                fontSize: '0.82rem',
+                fontWeight: '600',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem'
+              }}>
+                ⚠️ {loginError}
+              </div>
+            )}
+
+            <div className="form-group" style={{ margin: 0 }}>
+              <label className="form-label" style={{ fontSize: '0.75rem', letterSpacing: '0.5px' }}>
+                EMAIL CORPORATIVO
+              </label>
+              <div style={{ position: 'relative' }}>
+                <span style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }}>
+                  ✉️
+                </span>
+                <input 
+                  type="email" 
+                  className="form-input" 
+                  style={{ paddingLeft: '36px', width: '100%', boxSizing: 'border-box' }}
+                  placeholder="ejemplo@empresa.com"
+                  value={loginEmail}
+                  onChange={e => setLoginEmail(e.target.value)}
+                  required 
+                />
+              </div>
+            </div>
+
+            <div className="form-group" style={{ margin: 0 }}>
+              <label className="form-label" style={{ fontSize: '0.75rem', letterSpacing: '0.5px' }}>
+                CONTRASEÑA
+              </label>
+              <div style={{ position: 'relative' }}>
+                <span style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }}>
+                  🔒
+                </span>
+                <input 
+                  type="password" 
+                  className="form-input" 
+                  style={{ paddingLeft: '36px', width: '100%', boxSizing: 'border-box' }}
+                  placeholder="••••"
+                  value={loginPassword}
+                  onChange={e => setLoginPassword(e.target.value)}
+                  required 
+                />
+              </div>
+            </div>
+
+            <button 
+              type="submit" 
+              className="btn btn-primary" 
+              style={{
+                width: '100%',
+                padding: '0.85rem',
+                borderRadius: '12px',
+                fontWeight: 'bold',
+                fontSize: '0.95rem',
+                boxShadow: '0 4px 12px rgba(79, 70, 229, 0.25)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '0.5rem',
+                cursor: 'pointer'
+              }}
+              disabled={isLoggingIn}
+            >
+              {isLoggingIn ? (
+                <div style={{ width: '16px', height: '16px', borderRadius: '50%', border: '2px solid rgba(255,255,255,0.2)', borderTopColor: '#fff', animation: 'spin 1s linear infinite' }}></div>
+              ) : 'Iniciar Sesión'}
+            </button>
+          </form>
+
+          {/* Theme switcher inside login card */}
+          <div style={{ display: 'flex', justifyContent: 'center', borderTop: '1px solid var(--border-color)', paddingTop: '1.25rem', marginTop: '0.5rem' }}>
+            <button
+              onClick={toggleTheme}
+              style={{
+                background: 'rgba(255,255,255,0.05)',
+                border: '1px solid var(--border-color)',
+                color: 'var(--text-primary)',
+                padding: '0.5rem 1rem',
+                borderRadius: '20px',
+                cursor: 'pointer',
+                fontSize: '0.8rem',
+                fontWeight: 'bold',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem'
+              }}
+            >
+              {isLightTheme ? '🌙 Modo Oscuro' : '☀️ Modo Claro'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div onMouseUp={() => setIsPainting(false)}>
@@ -1885,6 +2274,34 @@ export default function Dashboard() {
                 <strong>Gestiona:</strong> {getManagedDeptsNames()}
               </div>
             )}
+
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                handleLogout();
+              }}
+              style={{
+                width: '100%',
+                padding: '0.5rem',
+                marginTop: '0.75rem',
+                borderRadius: '10px',
+                border: '1px solid rgba(239, 68, 68, 0.2)',
+                backgroundColor: 'rgba(239, 68, 68, 0.08)',
+                color: '#ef4444',
+                fontSize: '0.8rem',
+                fontWeight: 'bold',
+                cursor: 'pointer',
+                transition: 'background-color 0.2s',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '0.35rem'
+              }}
+              onMouseEnter={e => e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.15)'}
+              onMouseLeave={e => e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.08)'}
+            >
+              🚪 Cerrar Sesión
+            </button>
           </div>
         )}
       </aside>
@@ -1909,20 +2326,22 @@ export default function Dashboard() {
           </div>
 
           {/* User Switcher Dropdown */}
-          <div className="glass-panel user-selector-wrapper">
-            <span className="selector-label">Vista de Simulación:</span>
-            <select 
-              className="selector-dropdown"
-              value={selectedUserId} 
-              onChange={handleUserChange}
-            >
-              {usersList.map(u => (
-                <option key={u.id} value={u.id}>
-                  {u.name} ({u.role === 'admin' ? 'Admin' : u.role === 'coordinator' ? 'Coordinador' : 'Empleado'})
-                </option>
-              ))}
-            </select>
-          </div>
+          {loggedInUser?.role === 'admin' && (
+            <div className="glass-panel user-selector-wrapper">
+              <span className="selector-label">Vista de Simulación:</span>
+              <select 
+                className="selector-dropdown"
+                value={selectedUserId} 
+                onChange={handleUserChange}
+              >
+                {[...usersList].sort((a, b) => a.name.localeCompare(b.name)).map(u => (
+                  <option key={u.id} value={u.id}>
+                    {u.name} ({u.role === 'admin' ? 'Admin' : u.role === 'coordinator' ? 'Coordinador' : 'Empleado'})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
 
         {error && (
@@ -2918,9 +3337,19 @@ export default function Dashboard() {
                     <div className="glass-panel">
                       <div className="panel-header">
                         <h2 className="panel-title">👥 Listado General de Empleados</h2>
-                        <button className="btn btn-primary" onClick={openAddEmployee}>
-                          + Nuevo Empleado
-                        </button>
+                        <div style={{ display: 'flex', gap: '0.75rem' }}>
+                          <button 
+                            type="button" 
+                            className="btn btn-secondary" 
+                            onClick={openInitYearModal}
+                            style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+                          >
+                            📅 Iniciar Año
+                          </button>
+                          <button className="btn btn-primary" onClick={openAddEmployee}>
+                            + Nuevo Empleado
+                          </button>
+                        </div>
                       </div>
                       <div style={{ display: 'flex', gap: '1rem', padding: '1rem 1.5rem', borderBottom: '1px solid var(--border-color)', flexWrap: 'wrap' }}>
                         <div style={{ flex: 1, minWidth: '200px' }}>
@@ -2957,10 +3386,12 @@ export default function Dashboard() {
                                                   emp.email.toLowerCase().includes(employeeSearch.toLowerCase());
                             const matchesDept = !employeeDeptFilter || emp.department_id?.toString() === employeeDeptFilter;
                             return matchesSearch && matchesDept;
-                          }).map(emp => {
+                          }).sort((a, b) => a.name.localeCompare(b.name)).map(emp => {
                             const nameParts = emp.name.trim().split(/\s+/);
                             const initials = nameParts.length > 1 
-                                                        return (
+                              ? (nameParts[0].charAt(0) + nameParts[nameParts.length - 1].charAt(0)).toUpperCase()
+                              : nameParts[0].charAt(0).toUpperCase();
+                            return (
                                <div 
                                  key={emp.id} 
                                  className="glass-panel employee-card-interactive" 
@@ -3753,7 +4184,70 @@ export default function Dashboard() {
                               </div>
                             ))
                           )}
+                      </div>
+                    </div>
+
+                    {/* Bottom Panel: Configuración de Notificaciones por Email */}
+                      <div className="glass-panel" style={{ flex: '1 1 100%', padding: '1.5rem', marginTop: '1.5rem' }}>
+                        <div className="panel-header" style={{ borderBottom: 'none', paddingBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <span style={{ fontSize: '1.2rem' }}>📧</span>
+                          <h3 className="panel-title" style={{ fontSize: '1.2rem', fontWeight: '800', margin: 0 }}>Preferencias de Notificaciones por Email</h3>
                         </div>
+                        <p style={{ fontSize: '0.88rem', color: 'var(--text-secondary)', marginBottom: '1.25rem' }}>
+                          Marca las casillas correspondientes para activar o desactivar el envío de correos electrónicos informativos a cada rol del sistema según el evento desencadenado.
+                        </p>
+                        <form onSubmit={saveEmailSettings}>
+                          <div className="custom-table-wrapper" style={{ border: '1px solid var(--border-color)', borderRadius: '12px', overflow: 'hidden' }}>
+                            <table className="custom-table">
+                              <thead>
+                                <tr>
+                                  <th style={{ textAlign: 'left', padding: '1rem' }}>Evento del Sistema</th>
+                                  <th style={{ textAlign: 'center', padding: '1rem' }}>Notificar Empleado</th>
+                                  <th style={{ textAlign: 'center', padding: '1rem' }}>Notificar Coordinador</th>
+                                  <th style={{ textAlign: 'center', padding: '1rem' }}>Notificar Admin</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {emailSettings.map(setting => (
+                                  <tr key={setting.event_key}>
+                                    <td style={{ textAlign: 'left', fontWeight: 'bold', padding: '1rem', color: 'var(--text-primary)' }}>
+                                      {setting.event_name}
+                                    </td>
+                                    <td style={{ textAlign: 'center', padding: '1rem' }}>
+                                      <input 
+                                        type="checkbox" 
+                                        checked={setting.notify_employee} 
+                                        onChange={e => handleEmailSettingChange(setting.event_key, 'notify_employee', e.target.checked)}
+                                        style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                                      />
+                                    </td>
+                                    <td style={{ textAlign: 'center', padding: '1rem' }}>
+                                      <input 
+                                        type="checkbox" 
+                                        checked={setting.notify_coordinator} 
+                                        onChange={e => handleEmailSettingChange(setting.event_key, 'notify_coordinator', e.target.checked)}
+                                        style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                                      />
+                                    </td>
+                                    <td style={{ textAlign: 'center', padding: '1rem' }}>
+                                      <input 
+                                        type="checkbox" 
+                                        checked={setting.notify_admin} 
+                                        onChange={e => handleEmailSettingChange(setting.event_key, 'notify_admin', e.target.checked)}
+                                        style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                                      />
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1.25rem' }}>
+                            <button type="submit" className="btn btn-primary" style={{ padding: '0.6rem 1.5rem', borderRadius: '10px', fontWeight: 'bold' }}>
+                              Guardar Preferencias de Email
+                            </button>
+                          </div>
+                        </form>
                       </div>
                     </div>
                   )}
@@ -4505,7 +4999,12 @@ export default function Dashboard() {
                 <div className="glass-panel" style={{ width: '100%' }}>
                   <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                      <h2 className="panel-title" style={{ margin: 0 }}>📅 Planificación de Turnos</h2>
+                      <h2 className="panel-title" style={{ margin: 0 }}>
+                        {dashboardData?.user?.role === 'admin' 
+                          ? '📅 Planificación de Turnos' 
+                          : `📅 Planificación Turnos del Departamento "${dashboardData?.user?.department_name || 'Sin Departamento'}"`
+                        }
+                      </h2>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(255,255,255,0.05)', padding: '0.4rem 0.8rem', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
                         <button type="button" className="btn btn-secondary" style={{ padding: '0.2rem 0.6rem', margin: 0, fontSize: '0.9rem' }} onClick={handlePrevMonth}>◀</button>
                         <span style={{ fontWeight: '600', fontSize: '1rem', minWidth: '120px', textAlign: 'center' }}>
@@ -4766,6 +5265,18 @@ export default function Dashboard() {
                             list = list.filter(emp => emp.department_id?.toString() === schedDeptFilter);
                           }
 
+                          // Apply custom order from planningEmployeeOrder
+                          if (planningEmployeeOrder.length > 0) {
+                            list = [...list].sort((a, b) => {
+                              const ia = planningEmployeeOrder.indexOf(a.id);
+                              const ib = planningEmployeeOrder.indexOf(b.id);
+                              if (ia === -1 && ib === -1) return 0;
+                              if (ia === -1) return 1;
+                              if (ib === -1) return -1;
+                              return ia - ib;
+                            });
+                          }
+
                           if (list.length === 0) {
                             return (
                               <tr>
@@ -4796,8 +5307,42 @@ export default function Dashboard() {
                             });
 
                             return (
-                              <tr key={emp.id} style={isDeBaja ? { opacity: 0.95 } : undefined}>
+                              <tr 
+                                key={emp.id} 
+                                style={isDeBaja ? { opacity: 0.95 } : undefined}
+                                onDragOver={isPlanningEditMode ? (e) => {
+                                  e.preventDefault();
+                                  e.dataTransfer.dropEffect = 'move';
+                                  dragOverRowRef.current = emp.id;
+                                } : undefined}
+                                onDrop={isPlanningEditMode ? (e) => {
+                                  e.preventDefault();
+                                  const fromId = dragRowRef.current;
+                                  const toId = dragOverRowRef.current;
+                                  if (!fromId || !toId || fromId === toId) return;
+                                  const currentIds = list.map(e => e.id);
+                                  const fromIdx = currentIds.indexOf(fromId);
+                                  const toIdx = currentIds.indexOf(toId);
+                                  if (fromIdx === -1 || toIdx === -1) return;
+                                  const reordered = [...currentIds];
+                                  reordered.splice(fromIdx, 1);
+                                  reordered.splice(toIdx, 0, fromId);
+                                  setPlanningEmployeeOrder(reordered);
+                                  dragRowRef.current = null;
+                                  dragOverRowRef.current = null;
+                                } : undefined}
+                              >
                                 <td 
+                                  draggable={isPlanningEditMode && dashboardData.user.role !== 'employee'}
+                                  onDragStart={isPlanningEditMode ? (e) => {
+                                    dragRowRef.current = emp.id;
+                                    e.dataTransfer.effectAllowed = 'move';
+                                  } : undefined}
+                                  onDragEnd={isPlanningEditMode ? () => {
+                                    dragRowRef.current = null;
+                                    dragOverRowRef.current = null;
+                                  } : undefined}
+                                  onClick={!isPlanningEditMode && dashboardData?.user?.role === 'admin' ? () => openEditEmployee(emp) : undefined}
                                   style={{ 
                                     position: 'sticky', 
                                     left: 0, 
@@ -4808,14 +5353,33 @@ export default function Dashboard() {
                                     fontSize: '0.9rem',
                                     whiteSpace: 'nowrap',
                                     textOverflow: 'ellipsis',
-                                    color: isDeBaja ? (isLightTheme ? '#64748b' : '#94a3b8') : 'var(--text-primary)'
+                                    color: isDeBaja ? (isLightTheme ? '#64748b' : '#94a3b8') : 'var(--text-primary)',
+                                    cursor: isPlanningEditMode && dashboardData.user.role !== 'employee' ? 'grab' : (dashboardData?.user?.role === 'admin' ? 'pointer' : 'default')
                                   }}
                                 >
-                                  <div style={{ fontWeight: '600' }}>{emp.name}</div>
-                                  <div style={{ fontSize: '0.75rem', color: isDeBaja ? (isLightTheme ? '#8b9bb4' : '#64748b') : 'var(--text-muted)', fontWeight: 'normal' }}>
-                                     {emp.department_name || 'Sin departamento'}
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                    {isPlanningEditMode && dashboardData.user.role !== 'employee' && (
+                                      <span 
+                                        title="Arrastra para reordenar"
+                                        style={{ 
+                                          fontSize: '1rem', 
+                                          color: 'var(--text-muted)', 
+                                          cursor: 'grab', 
+                                          userSelect: 'none',
+                                          flexShrink: 0,
+                                          lineHeight: 1
+                                        }}
+                                      >⠿</span>
+                                    )}
+                                    <div>
+                                      <div style={{ fontWeight: '600' }}>{emp.name}</div>
+                                      <div style={{ fontSize: '0.75rem', color: isDeBaja ? (isLightTheme ? '#8b9bb4' : '#64748b') : 'var(--text-muted)', fontWeight: 'normal' }}>
+                                         {emp.department_name || 'Sin departamento'}
+                                      </div>
+                                    </div>
                                   </div>
                                 </td>
+
                                 
                                 {Array.from({ length: getDaysInMonth(schedYear, schedMonth) }).map((_, idx) => {
                                   const dayNum = idx + 1;
@@ -4900,7 +5464,9 @@ export default function Dashboard() {
                                         <div style={{
                                           fontSize: '0.55rem',
                                           fontWeight: 'bold',
-                                          backgroundColor: reqOnDay.status === 'approved' ? 'rgba(16, 185, 129, 0.95)' : 'rgba(245, 158, 11, 0.95)',
+                                          backgroundColor: (reqOnDay.absence_type_name && reqOnDay.absence_type_name.toLowerCase().includes('baja'))
+                                            ? 'rgba(239, 68, 68, 0.95)'
+                                            : (reqOnDay.status === 'approved' ? 'rgba(16, 185, 129, 0.95)' : 'rgba(245, 158, 11, 0.95)'),
                                           color: '#fff',
                                           padding: '1px 3px',
                                           borderRadius: '3px',
@@ -4912,7 +5478,7 @@ export default function Dashboard() {
                                           textShadow: 'none',
                                           zIndex: 2
                                         }}>
-                                          {reqOnDay.type === 'hours_free' ? 'Libres' : (reqOnDay.absence_type_name === 'Vacaciones' ? 'Vac' : (reqOnDay.absence_type_name === 'Baja Médica' ? 'Baja' : 'Aus'))}
+                                          {reqOnDay.type === 'hours_free' ? 'Libres' : (reqOnDay.absence_type_name === 'Vacaciones' ? 'Vac' : (reqOnDay.absence_type_name && reqOnDay.absence_type_name.toLowerCase().includes('baja') ? 'Baja' : 'Aus'))}
                                         </div>
                                       )}
                                       {assignedShift && (
@@ -5817,12 +6383,30 @@ export default function Dashboard() {
               </form>
 
               <div className="glass-panel" style={{ padding: '1.25rem', overflowY: 'auto', maxHeight: '420px' }}>
-                <h4 style={{ marginBottom: '1rem', color: 'var(--primary-light)' }}>Historial de Transacciones</h4>
-                {employeeTimeRecords.length === 0 ? (
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                  <h4 style={{ margin: 0, color: 'var(--primary-light)' }}>Historial de Transacciones</h4>
+                  
+                  {processedTimeRecords.length > 0 && (
+                    <select
+                      className="selector-dropdown"
+                      style={{ width: 'auto', padding: '0.25rem 0.5rem', fontSize: '0.8rem', borderRadius: '8px' }}
+                      value={historyYearFilter}
+                      onChange={e => setHistoryYearFilter(e.target.value)}
+                    >
+                      {uniqueYears.map(yr => (
+                        <option key={yr} value={yr}>
+                          {yr === 'all' ? '📅 Todos' : yr}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
+                {filteredTimeRecords.length === 0 ? (
                   <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', fontStyle: 'italic' }}>Sin movimientos registrados.</p>
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                    {employeeTimeRecords.map(rec => (
+                    {filteredTimeRecords.map(rec => (
                       <div 
                         key={rec.id} 
                         onClick={() => setSelectedTimeRecord(rec)}
@@ -5837,17 +6421,67 @@ export default function Dashboard() {
                         }}
                         className="time-record-item-hover"
                       >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem', alignItems: 'center' }}>
                           <span style={{ fontWeight: '600' }}>{rec.type === 'vacation' ? '🏖 Vacaciones' : '⏱ Horas Extras'}</span>
-                          <span style={{ 
-                            fontWeight: 'bold', 
-                            color: parseFloat(rec.amount) > 0 ? 'var(--success)' : 'var(--danger)' 
-                          }}>
-                            {parseFloat(rec.amount) > 0 ? `+${rec.amount}` : rec.amount}
-                            {rec.type === 'vacation' ? 'd' : 'h'}
-                          </span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <span style={{ 
+                              fontWeight: 'bold', 
+                              color: parseFloat(rec.amount) > 0 ? 'var(--success)' : 'var(--danger)' 
+                            }}>
+                              {parseFloat(rec.amount) > 0 ? `+${rec.amount}` : rec.amount}
+                              {rec.type === 'vacation' ? 'd' : 'h'}
+                            </span>
+
+                            {dashboardData?.user?.role === 'admin' && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setRecordToDelete(rec);
+                                  setShowDeleteConfirmModal(true);
+                                }}
+                                style={{
+                                  background: 'none',
+                                  border: 'none',
+                                  color: 'var(--danger)',
+                                  cursor: 'pointer',
+                                  padding: '0.25rem',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  borderRadius: '4px'
+                                }}
+                                title="Eliminar Registro"
+                              >
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ transition: 'transform 0.2s' }} onMouseEnter={e => e.currentTarget.style.transform = 'scale(1.2)'} onMouseLeave={e => e.currentTarget.style.transform = 'scale(1)'}>
+                                  <polyline points="3 6 5 6 21 6"></polyline>
+                                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                                </svg>
+                              </button>
+                            )}
+                          </div>
                         </div>
                         <div style={{ color: 'var(--text-secondary)', margin: '0.25rem 0' }}>"{rec.observation}"</div>
+                        
+                        <div style={{ 
+                          display: 'flex', 
+                          gap: '0.5rem', 
+                          fontSize: '0.75rem', 
+                          backgroundColor: 'rgba(255, 255, 255, 0.02)', 
+                          padding: '0.35rem 0.5rem', 
+                          borderRadius: '6px', 
+                          border: '1px solid var(--border-color)',
+                          margin: '0.35rem 0',
+                          color: 'var(--text-secondary)',
+                          flexWrap: 'wrap'
+                        }}>
+                          <span><strong>Previo:</strong> {parseFloat(rec.balanceBefore).toFixed(1)}{rec.type === 'vacation' ? 'd' : 'h'}</span>
+                          <span style={{ color: 'var(--text-muted)' }}>➔</span>
+                          <span><strong>Mov:</strong> {parseFloat(rec.amount) > 0 ? `+${parseFloat(rec.amount).toFixed(1)}` : parseFloat(rec.amount).toFixed(1)}{rec.type === 'vacation' ? 'd' : 'h'}</span>
+                          <span style={{ color: 'var(--text-muted)' }}>➔</span>
+                          <span><strong>Saldo:</strong> <strong style={{ color: 'var(--text-primary)' }}>{parseFloat(rec.balanceAfter).toFixed(1)}{rec.type === 'vacation' ? 'd' : 'h'}</strong></span>
+                        </div>
+
                         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
                           <span>Por: {rec.creator_name || 'Sistema'}</span>
                           <span>{new Date(rec.created_at).toLocaleDateString('es-ES')}</span>
@@ -6106,6 +6740,175 @@ export default function Dashboard() {
               </span>
             </div>
 
+          </div>
+        </div>
+      )}
+
+      {/* Confirm Adjustment Modal */}
+      {showConfirmAdjustmentModal && pendingAdjustment && (
+        <div className="modal-overlay" style={{ zIndex: 1200 }}>
+          <div className="modal-content" style={{ maxWidth: '450px', width: '90%', borderRadius: '24px', overflow: 'hidden', border: '1px solid var(--border-color)', boxShadow: 'var(--modal-shadow)', background: 'var(--bg-modal, #0f172a)' }}>
+            <div className="panel-header" style={{ padding: '1.25rem 1.5rem', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '38px', height: '38px', borderRadius: '10px', backgroundColor: 'var(--warning)', color: '#fff', fontSize: '1.25rem' }}>
+                ⚠️
+              </div>
+              <h3 className="panel-title" style={{ fontSize: '1.15rem', fontWeight: '800', margin: 0 }}>Confirmar Ajuste de Saldo</h3>
+            </div>
+            
+            <div className="panel-body" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <p style={{ fontSize: '0.95rem', color: 'var(--text-primary)', margin: 0, lineHeight: '1.5' }}>
+                ¿Seguro que quieres <strong>{parseFloat(pendingAdjustment.amount) > 0 ? 'añadir' : 'restar'} {Math.abs(parseFloat(pendingAdjustment.amount))} {pendingAdjustment.type === 'vacation' ? 'días' : 'horas'}</strong> a <strong>{pendingAdjustment.employeeName}</strong>?
+              </p>
+              
+              {pendingAdjustment.isQuick ? (
+                <div className="form-group" style={{ margin: 0 }}>
+                  <label className="form-label" style={{ fontSize: '0.75rem', fontWeight: 'bold', color: 'var(--text-secondary)' }}>OBSERVACIONES / MOTIVO (OPCIONAL)</label>
+                  <textarea 
+                    className="form-input" 
+                    style={{ minHeight: '80px', fontFamily: 'inherit', width: '100%', boxSizing: 'border-box' }}
+                    placeholder="Indica el motivo de este ajuste..."
+                    value={adjustmentObservation}
+                    onChange={e => setAdjustmentObservation(e.target.value)}
+                  />
+                </div>
+              ) : (
+                pendingAdjustment.observation && (
+                  <div style={{ backgroundColor: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', padding: '0.75rem 1rem', borderRadius: '10px', fontSize: '0.85rem' }}>
+                    <span style={{ fontWeight: 'bold', color: 'var(--text-secondary)', display: 'block', fontSize: '0.75rem', textTransform: 'uppercase', marginBottom: '0.25rem' }}>Razón del Ajuste:</span>
+                    <span style={{ color: 'var(--text-primary)', fontStyle: 'italic' }}>"{pendingAdjustment.observation}"</span>
+                  </div>
+                )
+              )}
+            </div>
+
+            <div className="panel-header" style={{ borderBottom: 'none', borderTop: '1px solid var(--border-color)', justifyContent: 'flex-end', gap: '0.75rem', padding: '1rem 1.5rem' }}>
+              <button 
+                type="button" 
+                className="btn btn-secondary" 
+                style={{ borderRadius: '10px' }} 
+                onClick={() => {
+                  setShowConfirmAdjustmentModal(false);
+                  setPendingAdjustment(null);
+                  setAdjustmentObservation('');
+                }}
+              >
+                Cancelar
+              </button>
+              <button 
+                type="button" 
+                className="btn btn-primary" 
+                style={{ borderRadius: '10px' }} 
+                onClick={async () => {
+                  const onConfirm = pendingAdjustment.onConfirm;
+                  const enteredObs = adjustmentObservation;
+                  setShowConfirmAdjustmentModal(false);
+                  setPendingAdjustment(null);
+                  setAdjustmentObservation('');
+                  await onConfirm(enteredObs);
+                }}
+              >
+                Confirmar Ajuste
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Iniciar Año Modal */}
+      {showInitYearModal && (
+        <div className="modal-overlay" style={{ zIndex: 1100 }}>
+          <div className="modal-content" style={{ maxWidth: '600px', width: '95%', borderRadius: '24px', overflow: 'hidden' }}>
+            {/* Header */}
+            <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', padding: '1.25rem 1.5rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '38px', height: '38px', borderRadius: '10px', backgroundColor: 'var(--primary)', color: '#fff', fontSize: '1.25rem' }}>
+                  📅
+                </div>
+                <h3 className="panel-title" style={{ fontSize: '1.25rem', fontWeight: '800', margin: 0 }}>Iniciar Año Laboral</h3>
+              </div>
+              <button 
+                type="button" 
+                className="btn btn-secondary" 
+                style={{ padding: '0.35rem 0.55rem', border: 'none', background: 'transparent', fontSize: '1.15rem', cursor: 'pointer' }} 
+                onClick={() => setShowInitYearModal(false)}
+              >
+                ✕
+              </button>
+            </div>
+
+            {initYearStep === 1 ? (
+              <form onSubmit={handleInitYearNext}>
+                <div className="panel-body" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                  <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', margin: 0 }}>
+                    Esta función iniciará el año para todos los empleados del sistema. Se añadirán automáticamente <strong>31 días de vacaciones</strong> a los saldos de cada colaborador y se creará una transacción descriptiva en sus historiales.
+                  </p>
+                  
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label className="form-label" style={{ fontSize: '0.75rem', letterSpacing: '0.5px' }}>SELECCIONAR AÑO A INICIAR</label>
+                    <input 
+                      type="number" 
+                      className="form-input"
+                      style={{ width: '100%', boxSizing: 'border-box' }}
+                      min="2020"
+                      max="2100"
+                      value={initYearSelected}
+                      onChange={e => setInitYearSelected(e.target.value)}
+                      required 
+                    />
+                  </div>
+                </div>
+                <div className="panel-header" style={{ borderBottom: 'none', borderTop: '1px solid var(--border-color)', justifyContent: 'flex-end', gap: '0.75rem', padding: '1rem 1.5rem' }}>
+                  <button type="button" className="btn btn-secondary" style={{ borderRadius: '10px' }} onClick={() => setShowInitYearModal(false)}>Cancelar</button>
+                  <button type="submit" className="btn btn-primary" style={{ borderRadius: '10px' }}>Ver Vista Previa</button>
+                </div>
+              </form>
+            ) : (
+              <div>
+                <div className="panel-body" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.25rem', maxHeight: '60vh', overflowY: 'auto' }}>
+                  <div style={{ backgroundColor: 'var(--info-glow, rgba(59, 130, 246, 0.05))', border: '1px solid var(--info, #3b82f6)', color: 'var(--text-primary)', padding: '1rem', borderRadius: '12px', fontSize: '0.85rem' }}>
+                    <strong>Vista Previa de Cambios (Año {initYearSelected}):</strong> Todos los empleados recibirán un incremento de 31 días en su saldo de vacaciones.
+                  </div>
+
+                  <div className="custom-table-wrapper" style={{ border: '1px solid var(--border-color)', borderRadius: '12px', overflow: 'hidden', maxHeight: '320px', overflowY: 'auto' }}>
+                    <table className="custom-table">
+                      <thead>
+                        <tr>
+                          <th style={{ textAlign: 'left' }}>Empleado</th>
+                          <th style={{ textAlign: 'center' }}>Saldo Actual</th>
+                          <th style={{ textAlign: 'center' }}>Nuevo Saldo (+31d)</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {[...(dashboardData?.allEmployees || [])].sort((a, b) => a.name.localeCompare(b.name)).map(emp => (
+                          <tr key={emp.id}>
+                            <td style={{ fontWeight: 'bold', color: 'var(--text-primary)', textAlign: 'left' }}>{emp.name}</td>
+                            <td style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>{emp.vacation_days} días</td>
+                            <td style={{ textAlign: 'center', fontWeight: 'bold', color: 'var(--success, #10b981)' }}>{emp.vacation_days + 31} días</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+                <div className="panel-header" style={{ borderBottom: 'none', borderTop: '1px solid var(--border-color)', justifyContent: 'flex-end', gap: '0.75rem', padding: '1rem 1.5rem' }}>
+                  <button type="button" className="btn btn-secondary" style={{ borderRadius: '10px' }} onClick={() => setInitYearStep(1)} disabled={isInitializingYear}>Atrás</button>
+                  <button 
+                    type="button" 
+                    className="btn btn-primary" 
+                    style={{ borderRadius: '10px', display: 'flex', alignItems: 'center', gap: '0.5rem' }} 
+                    onClick={confirmInitYear} 
+                    disabled={isInitializingYear}
+                  >
+                    {isInitializingYear ? (
+                      <>
+                        <div style={{ width: '14px', height: '14px', borderRadius: '50%', border: '2px solid rgba(255,255,255,0.2)', borderTopColor: '#fff', animation: 'spin 1s linear infinite' }}></div>
+                        Procesando...
+                      </>
+                    ) : 'Confirmar e Iniciar Año'}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -6402,7 +7205,7 @@ export default function Dashboard() {
             </div>
 
             <form onSubmit={saveEmployee}>
-              <div className="panel-body" style={{ maxHeight: '78vh', overflowY: 'auto', padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+              <div className="panel-body" style={{ maxHeight: '60vh', overflowY: 'auto', padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
                 
                 {/* Profile / Details Grid */}
                 <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap' }}>
@@ -6672,32 +7475,37 @@ export default function Dashboard() {
                                 const target = e.target;
                                 target.value = '';
                                 target.blur();
-
-                                const obs = window.prompt("Indica una observación para esta regularización (opcional):");
-                                if (obs === null) return;
-                                const finalObs = obs.trim() ? `Regularización Admin: ${obs.trim()}` : 'Regularización Admin';
                                 
-                                // Call quick adjust
-                                try {
-                                  const res = await fetch('/api/time-records', {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({
-                                      employee_id: editingEmployee.id,
-                                      created_by: dashboardData.user.id,
-                                      type: 'vacation',
-                                      amount: val,
-                                      observation: finalObs,
-                                      action: 'adjust'
-                                    })
-                                  });
-                                  if (!res.ok) throw new Error("Ajuste fallido");
-                                  await refreshData();
-                                  setEmpForm(prev => ({ ...prev, vacation_days: parseFloat(prev.vacation_days) + val }));
-                                  fetchTimeRecords(editingEmployee.id);
-                                } catch (err) {
-                                  alert(err.message);
-                                }
+                                setPendingAdjustment({
+                                  employeeId: editingEmployee.id,
+                                  employeeName: editingEmployee.name,
+                                  type: 'vacation',
+                                  amount: val,
+                                  isQuick: true,
+                                  onConfirm: async (obsText) => {
+                                    const finalObs = obsText.trim() ? `Regularización Admin: ${obsText.trim()}` : 'Regularización Admin';
+                                    try {
+                                      const res = await fetch('/api/time-records', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({
+                                          employee_id: editingEmployee.id,
+                                          created_by: dashboardData.user.id,
+                                          type: 'vacation',
+                                          amount: val,
+                                          observation: finalObs,
+                                          action: 'adjust'
+                                        })
+                                      });
+                                      if (!res.ok) throw new Error("Ajuste fallido");
+                                      await refreshData();
+                                      fetchTimeRecords(editingEmployee.id);
+                                    } catch (err) {
+                                      alert(err.message);
+                                    }
+                                  }
+                                });
+                                setShowConfirmAdjustmentModal(true);
                               }
                             }}
                           />
@@ -6740,32 +7548,37 @@ export default function Dashboard() {
                                 const target = e.target;
                                 target.value = '';
                                 target.blur();
-
-                                const obs = window.prompt("Indica una observación para esta regularización (opcional):");
-                                if (obs === null) return;
-                                const finalObs = obs.trim() ? `Regularización Admin: ${obs.trim()}` : 'Regularización Admin';
                                 
-                                // Call quick adjust
-                                try {
-                                  const res = await fetch('/api/time-records', {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({
-                                      employee_id: editingEmployee.id,
-                                      created_by: dashboardData.user.id,
-                                      type: 'extra_hours',
-                                      amount: val,
-                                      observation: finalObs,
-                                      action: 'adjust'
-                                    })
-                                  });
-                                  if (!res.ok) throw new Error("Ajuste fallido");
-                                  await refreshData();
-                                  setEmpForm(prev => ({ ...prev, extra_hours: parseFloat(prev.extra_hours) + val }));
-                                  fetchTimeRecords(editingEmployee.id);
-                                } catch (err) {
-                                  alert(err.message);
-                                }
+                                setPendingAdjustment({
+                                  employeeId: editingEmployee.id,
+                                  employeeName: editingEmployee.name,
+                                  type: 'extra_hours',
+                                  amount: val,
+                                  isQuick: true,
+                                  onConfirm: async (obsText) => {
+                                    const finalObs = obsText.trim() ? `Regularización Admin: ${obsText.trim()}` : 'Regularización Admin';
+                                    try {
+                                      const res = await fetch('/api/time-records', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({
+                                          employee_id: editingEmployee.id,
+                                          created_by: dashboardData.user.id,
+                                          type: 'extra_hours',
+                                          amount: val,
+                                          observation: finalObs,
+                                          action: 'adjust'
+                                        })
+                                      });
+                                      if (!res.ok) throw new Error("Ajuste fallido");
+                                      await refreshData();
+                                      fetchTimeRecords(editingEmployee.id);
+                                    } catch (err) {
+                                      alert(err.message);
+                                    }
+                                  }
+                                });
+                                setShowConfirmAdjustmentModal(true);
                               }
                             }}
                           />
@@ -6778,9 +7591,25 @@ export default function Dashboard() {
                 {/* Recent Transactions History */}
                 {editingEmployee && (
                   <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '1.25rem' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                      <div style={{ fontSize: '0.85rem', fontWeight: '800', color: 'var(--text-secondary)', letterSpacing: '0.5px' }}>
-                        HISTORIAL RECIENTE
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <div style={{ fontSize: '0.85rem', fontWeight: '800', color: 'var(--text-secondary)', letterSpacing: '0.5px' }}>
+                          HISTORIAL RECIENTE
+                        </div>
+                        {processedTimeRecords.length > 0 && (
+                          <select
+                            className="selector-dropdown"
+                            style={{ width: 'auto', padding: '0.2rem 0.5rem', fontSize: '0.75rem', borderRadius: '8px' }}
+                            value={historyYearFilter}
+                            onChange={e => setHistoryYearFilter(e.target.value)}
+                          >
+                            {uniqueYears.map(yr => (
+                              <option key={yr} value={yr}>
+                                {yr === 'all' ? '📅 Todos' : yr}
+                              </option>
+                            ))}
+                          </select>
+                        )}
                       </div>
                       <button
                         type="button"
@@ -6791,13 +7620,13 @@ export default function Dashboard() {
                         💥 Limpiar Todo (Sin alterar saldos)
                       </button>
                     </div>
-                    {employeeTimeRecords.length === 0 ? (
+                    {filteredTimeRecords.length === 0 ? (
                       <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', fontStyle: 'italic', padding: '0.5rem' }}>
                         Sin movimientos registrados para este colaborador.
                       </p>
                     ) : (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem', maxHeight: '180px', overflowY: 'auto', paddingRight: '0.25rem' }}>
-                        {employeeTimeRecords.map(rec => (
+                        {filteredTimeRecords.map(rec => (
                           <div 
                             key={rec.id} 
                             onClick={() => setSelectedTimeRecord(rec)}
@@ -6818,17 +7647,67 @@ export default function Dashboard() {
                           >
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                               <span style={{ fontWeight: '700' }}>{rec.type === 'vacation' ? '🏖 Ajuste Vacaciones' : '⏱ Ajuste Horas'}</span>
-                              <span style={{ 
-                                fontWeight: '800', 
-                                color: parseFloat(rec.amount) > 0 ? 'var(--success)' : 'var(--danger)' 
-                              }}>
-                                {parseFloat(rec.amount) > 0 ? `+${rec.amount}` : rec.amount}
-                                {rec.type === 'vacation' ? 'd' : 'h'}
-                              </span>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <span style={{ 
+                                  fontWeight: '800', 
+                                  color: parseFloat(rec.amount) > 0 ? 'var(--success)' : 'var(--danger)' 
+                                }}>
+                                  {parseFloat(rec.amount) > 0 ? `+${rec.amount}` : rec.amount}
+                                  {rec.type === 'vacation' ? 'd' : 'h'}
+                                </span>
+
+                                {dashboardData?.user?.role === 'admin' && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setRecordToDelete(rec);
+                                      setShowDeleteConfirmModal(true);
+                                    }}
+                                    style={{
+                                      background: 'none',
+                                      border: 'none',
+                                      color: 'var(--danger)',
+                                      cursor: 'pointer',
+                                      padding: '0.2rem',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center',
+                                      borderRadius: '4px'
+                                    }}
+                                    title="Eliminar Registro"
+                                  >
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ transition: 'transform 0.2s' }} onMouseEnter={e => e.currentTarget.style.transform = 'scale(1.2)'} onMouseLeave={e => e.currentTarget.style.transform = 'scale(1)'}>
+                                      <polyline points="3 6 5 6 21 6"></polyline>
+                                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                                    </svg>
+                                  </button>
+                                )}
+                              </div>
                             </div>
                             <div style={{ color: 'var(--text-secondary)', fontStyle: 'italic', fontSize: '0.78rem' }}>
                               "{rec.observation}"
                             </div>
+                            
+                            <div style={{ 
+                              display: 'flex', 
+                              gap: '0.35rem', 
+                              fontSize: '0.72rem', 
+                              backgroundColor: 'rgba(255, 255, 255, 0.02)', 
+                              padding: '0.2rem 0.4rem', 
+                              borderRadius: '4px', 
+                              border: '1px solid var(--border-color)',
+                              margin: '0.15rem 0',
+                              color: 'var(--text-secondary)',
+                              flexWrap: 'wrap'
+                            }}>
+                              <span><strong>Previo:</strong> {parseFloat(rec.balanceBefore).toFixed(1)}{rec.type === 'vacation' ? 'd' : 'h'}</span>
+                              <span style={{ color: 'var(--text-muted)' }}>➔</span>
+                              <span><strong>Mov:</strong> {parseFloat(rec.amount) > 0 ? `+${parseFloat(rec.amount).toFixed(1)}` : parseFloat(rec.amount).toFixed(1)}{rec.type === 'vacation' ? 'd' : 'h'}</span>
+                              <span style={{ color: 'var(--text-muted)' }}>➔</span>
+                              <span><strong>Saldo:</strong> <strong style={{ color: 'var(--text-primary)' }}>{parseFloat(rec.balanceAfter).toFixed(1)}{rec.type === 'vacation' ? 'd' : 'h'}</strong></span>
+                            </div>
+
                             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: 'var(--text-muted)' }}>
                               <span>Registrado por: {rec.creator_name || 'Sistema'}</span>
                               <span>{new Date(rec.created_at).toLocaleDateString('es-ES')}</span>
@@ -7125,8 +8004,11 @@ export default function Dashboard() {
             return (
               <div key={`${year}-${month}`} className="print-sheet">
                 <div style={{ borderBottom: '2px solid #000', paddingBottom: '5px', marginBottom: '15px' }}>
-                  <h1 style={{ fontSize: '1.4rem', fontWeight: 'bold', color: '#000', margin: 0 }}>
-                    📅 Planificación de Turnos — {getMonthName(month)} {year}
+                   <h1 style={{ fontSize: '1.4rem', fontWeight: 'bold', color: '#000', margin: 0 }}>
+                    {dashboardData?.user?.role === 'admin' 
+                      ? '📅 Planificación de Turnos' 
+                      : `📅 Planificación Turnos del Departamento "${dashboardData?.user?.department_name || 'Sin Departamento'}"`
+                    } — {getMonthName(month)} {year}
                   </h1>
                   <div style={{ fontSize: '0.8rem', color: '#666', marginTop: '2px' }}>
                     Filtro: {schedDeptFilter ? (dashboardData.allDepartments?.find(d => d.id.toString() === schedDeptFilter)?.name || 'Departamento') : 'Todos los departamentos'}
