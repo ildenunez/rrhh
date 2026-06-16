@@ -1,4 +1,5 @@
 import { query } from '@/lib/db';
+import { logAudit } from '@/lib/audit';
 import { NextResponse } from 'next/server';
 
 // Fetch time transactions for an employee
@@ -11,13 +12,36 @@ export async function GET(request) {
       return NextResponse.json({ error: "ID de empleado requerido" }, { status: 400 });
     }
 
+    const parsedEmployeeId = parseInt(employeeId);
+
+    // Auto-reconciliation check: if employee profile has more extra hours than total selectable time records credits
+    const empRes = await query(`SELECT extra_hours FROM employees WHERE id = $1`, [parsedEmployeeId]);
+    if (empRes.rows.length > 0) {
+      const currentBalance = parseFloat(empRes.rows[0].extra_hours || 0);
+      
+      const sumRes = await query(`
+        SELECT COALESCE(SUM(remaining_amount), 0) as total_remaining
+        FROM time_records
+        WHERE employee_id = $1 AND type = 'extra_hours'
+      `, [parsedEmployeeId]);
+      const totalRemaining = parseFloat(sumRes.rows[0].total_remaining || 0);
+
+      if (currentBalance > totalRemaining) {
+        const diff = currentBalance - totalRemaining;
+        await query(`
+          INSERT INTO time_records (employee_id, created_by, type, amount, remaining_amount, observation)
+          VALUES ($1, NULL, 'extra_hours', $2, $2, 'Saldo inicial / Regularización de saldo')
+        `, [parsedEmployeeId, diff]);
+      }
+    }
+
     const trResult = await query(`
       SELECT tr.id, tr.employee_id, tr.created_by, tr.type, tr.amount, tr.remaining_amount, tr.observation, tr.created_at, e.name AS creator_name
       FROM time_records tr
       LEFT JOIN employees e ON tr.created_by = e.id
       WHERE tr.employee_id = $1
       ORDER BY tr.created_at DESC
-    `, [employeeId]);
+    `, [parsedEmployeeId]);
 
     return NextResponse.json({ success: true, records: trResult.rows });
   } catch (error) {
@@ -29,7 +53,7 @@ export async function GET(request) {
 // Add transaction (adjustment or consumption)
 export async function POST(request) {
   try {
-    const { employee_id, type, amount, observation, created_by, original_record_id, action } = await request.json();
+    const { employee_id, type, amount, observation, created_by, original_record_id, action, actor_id } = await request.json();
 
     if (!employee_id || !type || !action) {
       return NextResponse.json({ error: "Faltan parámetros obligatorios" }, { status: 400 });
@@ -42,6 +66,10 @@ export async function POST(request) {
     if (isNaN(parsedAmount) || parsedAmount === 0) {
       return NextResponse.json({ error: "Cantidad inválida" }, { status: 400 });
     }
+
+    // Fetch employee name
+    const empRes = await query(`SELECT name FROM employees WHERE id = $1`, [parsedEmployeeId]);
+    const empName = empRes.rows.length > 0 ? empRes.rows[0].name : `ID ${parsedEmployeeId}`;
 
     if (action === 'adjust') {
       // 1. Coordinator or Admin adjusting balance (+ or -)
@@ -68,6 +96,8 @@ export async function POST(request) {
           WHERE id = $2
         `, [parsedAmount, parsedEmployeeId]);
       }
+
+      await logAudit(actor_id || parsedCreatedBy, 'UPDATE', 'time_record', insertRes.rows[0].id, `Ajuste de saldo para ${empName}: ${parsedAmount > 0 ? '+' : ''}${parsedAmount} ${type === 'vacation' ? 'días' : 'horas'}. Motivo: ${observation}`);
 
       return NextResponse.json({ success: true, record: insertRes.rows[0] });
 
@@ -119,6 +149,8 @@ export async function POST(request) {
         RETURNING *
       `, [parsedEmployeeId, parsedCreatedBy, -parsedAmount, fullObservation]);
 
+      await logAudit(actor_id || parsedCreatedBy || parsedEmployeeId, 'UPDATE', 'time_record', insertRes.rows[0].id, `Consumo de ${parsedAmount}h de saldo para ${empName}. Reg Origen: #${parsedOriginalRecordId}`);
+
       return NextResponse.json({ success: true, record: insertRes.rows[0] });
     }
 
@@ -135,12 +167,14 @@ export async function DELETE(request) {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
     const employeeId = searchParams.get('employeeId');
+    const actor_id = searchParams.get('actor_id');
 
     if (employeeId) {
       const parsedEmpId = parseInt(employeeId);
       // Delete all requests and time records for this employee
       await query(`DELETE FROM requests WHERE employee_id = $1`, [parsedEmpId]);
       await query(`DELETE FROM time_records WHERE employee_id = $1`, [parsedEmpId]);
+      await logAudit(actor_id, 'DELETE', 'time_record', parsedEmpId, `Eliminados todos los registros y solicitudes para el empleado ID: ${parsedEmpId}`);
       return NextResponse.json({ success: true });
     }
 
@@ -178,6 +212,13 @@ export async function DELETE(request) {
 
     // Delete the transaction log
     await query(`DELETE FROM time_records WHERE id = $1`, [parsedId]);
+
+    // If there is an associated request, delete it too!
+    if (record.request_id) {
+      await query(`DELETE FROM requests WHERE id = $1`, [record.request_id]);
+    }
+
+    await logAudit(actor_id, 'DELETE', 'time_record', parsedId, `Eliminado registro de tiempo #${parsedId} para empleado ID ${record.employee_id}. Revertido: ${revert ? 'Sí' : 'No'}. Tipo: ${record.type}, Cantidad: ${record.amount}`);
 
     return NextResponse.json({ success: true });
   } catch (error) {

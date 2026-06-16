@@ -177,9 +177,10 @@ export async function GET(request) {
       if (managedDepartments.length > 0) {
         const deptIds = managedDepartments.map(d => d.id);
         const managedEmpsResult = await query(`
-          SELECT e.id, e.name, e.email, e.role, e.vacation_days, e.extra_hours, d.name AS department_name, d.id AS department_id, e.birth_date, e.avatar_url
+          SELECT e.id, e.name, e.email, e.role, e.vacation_days, e.extra_hours, d.name AS department_name, d.id AS department_id, e.team_id, t.name AS team_name, e.birth_date, e.avatar_url
           FROM employees e
           JOIN departments d ON e.department_id = d.id
+          LEFT JOIN teams t ON e.team_id = t.id
           WHERE d.id = ANY($1)
           ORDER BY e.name ASC
         `, [deptIds]);
@@ -233,8 +234,24 @@ export async function GET(request) {
         resolvedRequests: ownResolvedReqs.rows
       };
 
-      const allDeptsResult = await query(`SELECT id, name FROM departments ORDER BY name ASC`);
+      const allDeptsResult = await query(`
+        SELECT d.id, d.name, d.coordinator_id, e.name AS coordinator_name,
+               (SELECT COUNT(*) FROM employees WHERE department_id = d.id) as employee_count
+        FROM departments d
+        LEFT JOIN employees e ON d.coordinator_id = e.id
+        ORDER BY d.id ASC
+      `);
       dashboardData.allDepartments = allDeptsResult.rows;
+
+      const allTeamsResult = await query(`
+        SELECT t.*, d.name AS department_name, e.name AS coordinator_name,
+               (SELECT COUNT(*) FROM employees WHERE team_id = t.id) as employee_count
+        FROM teams t
+        JOIN departments d ON t.department_id = d.id
+        LEFT JOIN employees e ON t.coordinator_id = e.id
+        ORDER BY t.id ASC
+      `);
+      dashboardData.allTeams = allTeamsResult.rows;
 
     } else if (currentUser.role === 'admin') {
       // 3. Admin view
@@ -244,6 +261,7 @@ export async function GET(request) {
           COALESCE(SUM(vacation_days), 0) as total_vacations_pending, 
           COALESCE(SUM(extra_hours), 0) as total_extra_hours_pending 
         FROM employees
+        WHERE role != 'external_worker'
       `);
       const statsTime = await query(`
         SELECT 
@@ -265,9 +283,10 @@ export async function GET(request) {
       `);
 
       const allEmployeesResult = await query(`
-        SELECT e.id, e.name, e.email, e.role, e.department_id, e.vacation_days, e.extra_hours, d.name AS department_name, e.birth_date, e.avatar_url
+        SELECT e.id, e.name, e.role, e.department_id, e.team_id, e.vacation_days, e.extra_hours, d.name AS department_name, t.name AS team_name, e.birth_date, e.avatar_url, e.email
         FROM employees e
         LEFT JOIN departments d ON e.department_id = d.id
+        LEFT JOIN teams t ON e.team_id = t.id
         ORDER BY e.id ASC
       `);
 
@@ -282,6 +301,16 @@ export async function GET(request) {
         FROM departments d
         LEFT JOIN employees e ON d.coordinator_id = e.id
         ORDER BY d.id ASC
+      `);
+
+      // Fetch all teams
+      const allTeamsResult = await query(`
+        SELECT t.*, d.name AS department_name, e.name AS coordinator_name,
+               (SELECT COUNT(*) FROM employees WHERE team_id = t.id) as employee_count
+        FROM teams t
+        JOIN departments d ON t.department_id = d.id
+        LEFT JOIN employees e ON t.coordinator_id = e.id
+        ORDER BY t.id ASC
       `);
 
       const potentialCoordinatorsResult = await query(`
@@ -351,6 +380,7 @@ export async function GET(request) {
         sickEmployees: statsSickLeave.rows,
         allEmployees: allEmployeesResult.rows,
         allDepartments: allDeptsResult.rows,
+        allTeams: allTeamsResult.rows,
         potentialCoordinators: potentialCoordinatorsResult.rows,
         allPendingRequests,
         allResolvedRequests: allResolvedResult.rows,

@@ -870,7 +870,7 @@ a {
   }
 
   .custom-table tr {
-    height: 18px !important;
+    height: 14px !important;
   }
 
   /* Force employee column to shrink and wrap to prevent horizontal overflow */

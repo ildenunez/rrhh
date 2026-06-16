@@ -1,4 +1,5 @@
 import { query } from '@/lib/db';
+import { logAudit } from '@/lib/audit';
 import { NextResponse } from 'next/server';
 
 // Get requests (with filters depending on role)
@@ -144,6 +145,52 @@ export async function PUT(request) {
     return NextResponse.json({ success: true, request: res.rows[0] });
   } catch (error) {
     console.error('Error updating EPI request:', error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+}
+
+// Delete request (Admin can delete any, employee can delete their own)
+export async function DELETE(request) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const id = searchParams.get('id');
+    const actor_id = searchParams.get('actor_id');
+
+    if (!id || !actor_id) {
+      return NextResponse.json({ error: 'Faltan parámetros obligatorios' }, { status: 400 });
+    }
+
+    const parsedId = parseInt(id);
+    const parsedActorId = parseInt(actor_id);
+
+    // Fetch the target request details
+    const reqRes = await query('SELECT employee_id, status FROM epi_requests WHERE id = $1', [parsedId]);
+    if (reqRes.rows.length === 0) {
+      return NextResponse.json({ error: 'Solicitud de EPI no encontrada' }, { status: 404 });
+    }
+    const epiReq = reqRes.rows[0];
+
+    // Fetch actor's role
+    const actorRes = await query('SELECT role FROM employees WHERE id = $1', [parsedActorId]);
+    if (actorRes.rows.length === 0) {
+      return NextResponse.json({ error: 'Actor no encontrado' }, { status: 404 });
+    }
+    const actor = actorRes.rows[0];
+
+    // Check permission: must be admin OR the employee who owns the request
+    if (actor.role !== 'admin' && epiReq.employee_id !== parsedActorId) {
+      return NextResponse.json({ error: 'No tienes permisos para eliminar esta solicitud' }, { status: 403 });
+    }
+
+    // Delete request
+    await query('DELETE FROM epi_requests WHERE id = $1', [parsedId]);
+
+    // Track trace in audit log using the imported helper
+    await logAudit(parsedActorId, 'DELETE', 'epi_request', parsedId, `Eliminada solicitud de EPI #${parsedId} para empleado ID ${epiReq.employee_id}. Estado anterior: ${epiReq.status}`);
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting EPI request:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }

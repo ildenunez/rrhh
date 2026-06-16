@@ -49,6 +49,16 @@ export default function Dashboard() {
   const [editingEmployee, setEditingEmployee] = useState(null);
   const [editingDepartment, setEditingDepartment] = useState(null);
   const [editingAbsenceType, setEditingAbsenceType] = useState(null);
+  const [showTeamModal, setShowTeamModal] = useState(false);
+  const [editingTeam, setEditingTeam] = useState(null);
+  const [teamForm, setTeamForm] = useState({
+    name: '',
+    department_id: '',
+    coordinator_id: ''
+  });
+  const [showTeamWorkersModal, setShowTeamWorkersModal] = useState(false);
+  const [selectedTeamForWorkers, setSelectedTeamForWorkers] = useState(null);
+  const [teamWorkerForm, setTeamWorkerForm] = useState({ name: '', email: '' });
 
   const [selectedTimeEmployee, setSelectedTimeEmployee] = useState(null);
   const [employeeTimeRecords, setEmployeeTimeRecords] = useState([]);
@@ -59,6 +69,7 @@ export default function Dashboard() {
     email: '',
     role: 'employee',
     department_id: '',
+    team_id: '',
     vacation_days: 30,
     extra_hours: 0.0,
     password: '',
@@ -159,6 +170,7 @@ export default function Dashboard() {
   // Employee filters state
   const [employeeSearch, setEmployeeSearch] = useState('');
   const [employeeDeptFilter, setEmployeeDeptFilter] = useState('');
+  const [employeeTeamFilter, setEmployeeTeamFilter] = useState('');
   const [teamSearch, setTeamSearch] = useState('');
   const [teamDeptFilter, setTeamDeptFilter] = useState('');
 
@@ -186,6 +198,11 @@ export default function Dashboard() {
   const [profileForm, setProfileForm] = useState({ name: '', email: '', avatar_url: '', password: '' });
 
   const [reportsSubTab, setReportsSubTab] = useState('queries'); // 'queries' | 'stats'
+  
+  // Audit Logs State
+  const [auditLogs, setAuditLogs] = useState([]);
+  const [auditTargetFilter, setAuditTargetFilter] = useState('');
+  const [auditLoading, setAuditLoading] = useState(false);
 
   const getInitialDates = () => {
     const now = new Date();
@@ -212,7 +229,7 @@ export default function Dashboard() {
   const [epiRequestsList, setEpiRequestsList] = useState([]);
   const [newEpiForm, setNewEpiForm] = useState({ name: '', description: '' });
   const [newSizeForm, setNewSizeForm] = useState({ type_id: '', size_name: '' });
-  const [epiRequestForm, setEpiRequestForm] = useState({ type_id: '', size_id: '' });
+  const [epiRequestForm, setEpiRequestForm] = useState({ type_id: '', size_id: '', target_employee_id: '', target_dept_id: '' });
   const [epiTab, setEpiTab] = useState('my_requests'); // 'my_requests' | 'team_requests'
 
   const toggleTheme = () => {
@@ -282,6 +299,7 @@ export default function Dashboard() {
   const [isPlanningEditMode, setIsPlanningEditMode] = useState(false);
   const [backupShiftAssignments, setBackupShiftAssignments] = useState(null);
   const [schedDeptFilter, setSchedDeptFilter] = useState('');
+  const [schedTeamFilter, setSchedTeamFilter] = useState('');
   // Employee order for planning grid (persisted in localStorage)
   const [planningEmployeeOrder, setPlanningEmployeeOrder] = useState(() => {
     try { return JSON.parse(localStorage.getItem('planningEmployeeOrder') || '[]'); } catch { return []; }
@@ -295,9 +313,11 @@ export default function Dashboard() {
   useEffect(() => {
     setEmployeeSearch('');
     setEmployeeDeptFilter('');
+    setEmployeeTeamFilter('');
     setTeamSearch('');
     setTeamDeptFilter('');
     setSchedDeptFilter('');
+    setSchedTeamFilter('');
   }, [activeTab, settingsTab]);
 
   // Switcher initialization
@@ -313,8 +333,19 @@ export default function Dashboard() {
           const storedUser = localStorage.getItem('loggedInUser');
           if (storedUser) {
             const parsedUser = JSON.parse(storedUser);
-            setLoggedInUser(parsedUser);
-            setSelectedUserId(parsedUser.id.toString());
+            const lastAct = parseInt(localStorage.getItem('lastActivity') || '0', 10);
+            const sessDate = localStorage.getItem('sessionDate');
+            const todayDate = new Date().toDateString();
+
+            if ((lastAct && Date.now() - lastAct > 2 * 60 * 60 * 1000) || (sessDate && sessDate !== todayDate)) {
+              localStorage.removeItem('loggedInUser');
+              localStorage.removeItem('lastActivity');
+              localStorage.removeItem('sessionDate');
+              setLoading(false);
+            } else {
+              setLoggedInUser(parsedUser);
+              setSelectedUserId(parsedUser.id.toString());
+            }
           } else {
             // No user logged in yet, don't auto-set selectedUserId to load dashboard
             setLoading(false);
@@ -328,6 +359,53 @@ export default function Dashboard() {
     }
     initData();
   }, []);
+
+  // Automatic Session Management (Inactivity of 2 hours, and Midnight logout)
+  useEffect(() => {
+    if (!loggedInUser) return;
+
+    const updateActivity = () => {
+      localStorage.setItem('lastActivity', Date.now().toString());
+    };
+
+    updateActivity();
+    if (!localStorage.getItem('sessionDate')) {
+      localStorage.setItem('sessionDate', new Date().toDateString());
+    }
+
+    window.addEventListener('mousemove', updateActivity);
+    window.addEventListener('mousedown', updateActivity);
+    window.addEventListener('keypress', updateActivity);
+    window.addEventListener('scroll', updateActivity);
+    window.addEventListener('touchstart', updateActivity);
+
+    const interval = setInterval(() => {
+      // 1. Inactivity check: 2 hours (2 * 60 * 60 * 1000 = 7200000 ms)
+      const lastAct = parseInt(localStorage.getItem('lastActivity') || '0', 10);
+      if (lastAct && Date.now() - lastAct > 2 * 60 * 60 * 1000) {
+        alert('Tu sesión ha expirado por inactividad.');
+        handleLogout();
+        return;
+      }
+
+      // 2. Midnight check (new day since session started)
+      const sessDate = localStorage.getItem('sessionDate');
+      const todayDate = new Date().toDateString();
+      if (sessDate && sessDate !== todayDate) {
+        alert('Tu sesión ha expirado (cambio de día / 00:00). Por favor, vuelve a iniciar sesión.');
+        handleLogout();
+      }
+    }, 10000);
+
+    return () => {
+      window.removeEventListener('mousemove', updateActivity);
+      window.removeEventListener('mousedown', updateActivity);
+      window.removeEventListener('keypress', updateActivity);
+      window.removeEventListener('scroll', updateActivity);
+      window.removeEventListener('touchstart', updateActivity);
+      clearInterval(interval);
+    };
+  }, [loggedInUser]);
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -345,6 +423,8 @@ export default function Dashboard() {
       }
       if (data.success && data.user) {
         localStorage.setItem('loggedInUser', JSON.stringify(data.user));
+        localStorage.setItem('lastActivity', Date.now().toString());
+        localStorage.setItem('sessionDate', new Date().toDateString());
         setLoggedInUser(data.user);
         setSelectedUserId(data.user.id.toString());
         setLoginEmail('');
@@ -359,6 +439,8 @@ export default function Dashboard() {
 
   const handleLogout = () => {
     localStorage.removeItem('loggedInUser');
+    localStorage.removeItem('lastActivity');
+    localStorage.removeItem('sessionDate');
     setLoggedInUser(null);
     setSelectedUserId('');
     setDashboardData(null);
@@ -408,7 +490,26 @@ export default function Dashboard() {
     if (activeTab === 'admin_settings' && settingsTab === 'notifications') {
       fetchEmailSettings();
     }
-  }, [activeTab, settingsTab]);
+    if (activeTab === 'admin_settings' && settingsTab === 'audit') {
+      fetchAuditLogs();
+    }
+  }, [activeTab, settingsTab, auditTargetFilter]);
+
+  const fetchAuditLogs = async () => {
+    setAuditLoading(true);
+    try {
+      const url = auditTargetFilter ? `/api/audit-logs?targetType=${auditTargetFilter}` : '/api/audit-logs';
+      const res = await fetch(url);
+      const data = await res.json();
+      if (data.success && Array.isArray(data.logs)) {
+        setAuditLogs(data.logs);
+      }
+    } catch (err) {
+      console.error("Error loading audit logs:", err);
+    } finally {
+      setAuditLoading(false);
+    }
+  };
 
   const fetchEmailSettings = async () => {
     try {
@@ -672,21 +773,45 @@ export default function Dashboard() {
       alert('Por favor selecciona un EPI y su talla.');
       return;
     }
+    
+    // If admin is requesting, use target_employee_id, otherwise use current loggedInUser id
+    const targetEmployeeId = dashboardData.user.role === 'admin' && epiRequestForm.target_employee_id
+      ? parseInt(epiRequestForm.target_employee_id)
+      : dashboardData.user.id;
+
     try {
       const res = await fetch('/api/epi-requests', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          employee_id: dashboardData.user.id,
+          employee_id: targetEmployeeId,
           epi_type_id: epiRequestForm.type_id,
           size_id: epiRequestForm.size_id
         })
       });
       const data = await res.json();
       if (data.success) {
-        setEpiRequestForm({ type_id: '', size_id: '' });
+        setEpiRequestForm({ type_id: '', size_id: '', target_employee_id: '', target_dept_id: '' });
         fetchEpiRequests(dashboardData.user.id);
         alert('Solicitud de EPI enviada correctamente en estado Pendiente.');
+      } else {
+        alert(data.error);
+      }
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const deleteEpiRequest = async (requestId) => {
+    if (!confirm('¿Seguro que deseas eliminar esta solicitud de EPI?')) return;
+    try {
+      const res = await fetch(`/api/epi-requests?id=${requestId}&actor_id=${dashboardData.user.id}`, {
+        method: 'DELETE'
+      });
+      const data = await res.json();
+      if (data.success) {
+        fetchEpiRequests(dashboardData.user.id);
+        alert('Solicitud de EPI eliminada correctamente.');
       } else {
         alert(data.error);
       }
@@ -1020,13 +1145,11 @@ export default function Dashboard() {
       } else {
         payload.amount = requestForm.amount;
         payload.original_record_id = requestForm.original_record_id || null;
-        if (requestForm.hours_type === 'hours_register' || requestForm.hours_type === 'hours_festive' || requestForm.hours_type === 'hours_free') {
+        if (requestForm.hours_type === 'hours_register' || requestForm.hours_type === 'hours_festive' || requestForm.hours_type === 'hours_free' || requestForm.is_historical) {
           payload.start_date = requestForm.start_date;
-          if (requestForm.hours_type === 'hours_free') {
-            payload.end_date = requestForm.start_date;
-          }
+          payload.end_date = requestForm.start_date;
         }
-        if (requestForm.hours_type === 'hours_free' || requestForm.hours_type === 'hours_to_vacation' || requestForm.hours_type === 'hours_payroll') {
+        if ((requestForm.hours_type === 'hours_free' || requestForm.hours_type === 'hours_to_vacation' || requestForm.hours_type === 'hours_payroll') && !requestForm.is_historical) {
           // Send consumed credits array
           const creditsArray = Object.keys(selectedCredits)
             .filter(id => parseFloat(selectedCredits[id]) > 0)
@@ -1394,7 +1517,8 @@ export default function Dashboard() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           userId: selectedUserId,
-          assignments: assignmentsToSend
+          assignments: assignmentsToSend,
+          actor_id: dashboardData.user.id
         })
       });
       const data = await res.json();
@@ -1561,7 +1685,7 @@ export default function Dashboard() {
 
   const executeDeleteTimeRecord = async (recordId, revert) => {
     try {
-      const res = await fetch(`/api/time-records?id=${recordId}&revert=${revert}`, { method: 'DELETE' });
+      const res = await fetch(`/api/time-records?id=${recordId}&revert=${revert}&actor_id=${dashboardData.user.id}`, { method: 'DELETE' });
       const resData = await res.json();
       if (!res.ok) throw new Error(resData.error || "Error al eliminar transacción");
       
@@ -1577,7 +1701,7 @@ export default function Dashboard() {
   const deleteAllEmployeeRecords = async (empId) => {
     if (!confirm('¿Estás seguro de que deseas eliminar TODOS los registros de vacaciones, horas y regularizaciones de este empleado? Esta acción no alterará sus saldos actuales pero reseteará su historial de transacciones y solicitudes por completo.')) return;
     try {
-      const res = await fetch(`/api/time-records?employeeId=${empId}`, { method: 'DELETE' });
+      const res = await fetch(`/api/time-records?employeeId=${empId}&actor_id=${dashboardData.user.id}`, { method: 'DELETE' });
       const resData = await res.json();
       if (!res.ok) throw new Error(resData.error || "Error al eliminar registros");
       
@@ -1596,6 +1720,7 @@ export default function Dashboard() {
       email: '',
       role: 'employee',
       department_id: '',
+      team_id: '',
       vacation_days: 30,
       extra_hours: 0.0,
       password: '',
@@ -1612,6 +1737,7 @@ export default function Dashboard() {
       email: emp.email,
       role: emp.role,
       department_id: emp.department_id || '',
+      team_id: emp.team_id || '',
       vacation_days: emp.vacation_days ?? 30,
       extra_hours: emp.extra_hours ?? 0.0,
       password: '',
@@ -1638,7 +1764,9 @@ export default function Dashboard() {
     try {
       const url = '/api/employees';
       const method = editingEmployee ? 'PUT' : 'POST';
-      const body = editingEmployee ? { id: editingEmployee.id, ...empForm } : empForm;
+      const body = editingEmployee 
+        ? { id: editingEmployee.id, ...empForm, actor_id: dashboardData.user.id } 
+        : { ...empForm, actor_id: dashboardData.user.id };
 
       const res = await fetch(url, {
         method,
@@ -1659,7 +1787,7 @@ export default function Dashboard() {
   const deleteEmployee = async (id) => {
     if (!confirm('¿Estás seguro de que deseas eliminar este empleado?')) return;
     try {
-      const res = await fetch(`/api/employees?id=${id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/employees?id=${id}&actor_id=${dashboardData.user.id}`, { method: 'DELETE' });
       const resData = await res.json();
       if (!res.ok) throw new Error(resData.error || "Error al eliminar empleado");
       await refreshData();
@@ -1673,7 +1801,7 @@ export default function Dashboard() {
     if (!confirm(`¿Estás completamente seguro de que deseas eliminar al empleado ${editingEmployee.name}? Esta acción borrará de forma permanente todos sus datos (turnos, solicitudes, saldos y EPIs) y no se puede deshacer.`)) return;
     
     try {
-      const res = await fetch(`/api/employees?id=${editingEmployee.id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/employees?id=${editingEmployee.id}&actor_id=${dashboardData.user.id}`, { method: 'DELETE' });
       const resData = await res.json();
       if (!res.ok) throw new Error(resData.error || "Error al eliminar empleado");
       setShowEmployeeModal(false);
@@ -1709,7 +1837,9 @@ export default function Dashboard() {
     try {
       const url = '/api/departments';
       const method = editingDepartment ? 'PUT' : 'POST';
-      const body = editingDepartment ? { id: editingDepartment.id, ...deptForm } : deptForm;
+      const body = editingDepartment 
+        ? { id: editingDepartment.id, ...deptForm, actor_id: dashboardData.user.id } 
+        : { ...deptForm, actor_id: dashboardData.user.id };
 
       const res = await fetch(url, {
         method,
@@ -1730,9 +1860,120 @@ export default function Dashboard() {
   const deleteDepartment = async (id) => {
     if (!confirm('¿Estás seguro de que deseas eliminar este departamento? Los empleados de este departamento se quedarán sin departamento asignado.')) return;
     try {
-      const res = await fetch(`/api/departments?id=${id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/departments?id=${id}&actor_id=${dashboardData.user.id}`, { method: 'DELETE' });
       const resData = await res.json();
       if (!res.ok) throw new Error(resData.error || "Error al eliminar departamento");
+      await refreshData();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  // Team CRUD operations
+  const openAddTeam = () => {
+    setEditingTeam(null);
+    setTeamForm({
+      name: '',
+      department_id: '',
+      coordinator_id: ''
+    });
+    setShowTeamModal(true);
+  };
+
+  const openEditTeam = (team) => {
+    setEditingTeam(team);
+    setTeamForm({
+      name: team.name,
+      department_id: team.department_id || '',
+      coordinator_id: team.coordinator_id || ''
+    });
+    setShowTeamModal(true);
+  };
+
+  const saveTeam = async (e) => {
+    e.preventDefault();
+    try {
+      const url = '/api/teams';
+      const method = editingTeam ? 'PUT' : 'POST';
+      const body = editingTeam 
+        ? { id: editingTeam.id, ...teamForm, actor_id: dashboardData.user.id } 
+        : { ...teamForm, actor_id: dashboardData.user.id };
+
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      
+      const resData = await res.json();
+      if (!res.ok) throw new Error(resData.error || "Error al guardar equipo");
+
+      setShowTeamModal(false);
+      await refreshData();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const deleteTeam = async (id) => {
+    if (!confirm('¿Estás seguro de que deseas eliminar este equipo? Los empleados de este equipo se quedarán sin equipo asignado.')) return;
+    try {
+      const res = await fetch(`/api/teams?id=${id}&actor_id=${dashboardData.user.id}`, { method: 'DELETE' });
+      const resData = await res.json();
+      if (!res.ok) throw new Error(resData.error || "Error al eliminar equipo");
+      await refreshData();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const openManageTeamWorkers = (team) => {
+    setSelectedTeamForWorkers(team);
+    setTeamWorkerForm({ name: '', email: '' });
+    setShowTeamWorkersModal(true);
+  };
+
+  const addTeamWorker = async (e) => {
+    e.preventDefault();
+    if (!selectedTeamForWorkers) return;
+    try {
+      const cleanName = (n) => n.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const email = `operario_${cleanName(teamWorkerForm.name)}_${Date.now()}@externo.com`;
+
+      const body = {
+        name: teamWorkerForm.name,
+        email: email,
+        role: 'external_worker',
+        department_id: selectedTeamForWorkers.department_id,
+        team_id: selectedTeamForWorkers.id,
+        vacation_days: 0,
+        extra_hours: 0.00,
+        password: 'external_worker_no_login',
+        actor_id: dashboardData.user.id
+      };
+
+      const res = await fetch('/api/employees', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      
+      const resData = await res.json();
+      if (!res.ok) throw new Error(resData.error || "Error al añadir trabajador al equipo");
+
+      setTeamWorkerForm({ name: '', email: '' });
+      await refreshData();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const removeTeamWorker = async (workerId) => {
+    if (!confirm('¿Estás seguro de que deseas eliminar este trabajador/operario del equipo?')) return;
+    try {
+      const res = await fetch(`/api/employees?id=${workerId}&actor_id=${dashboardData.user.id}`, { method: 'DELETE' });
+      const resData = await res.json();
+      if (!res.ok) throw new Error(resData.error || "Error al eliminar trabajador");
       await refreshData();
     } catch (err) {
       alert(err.message);
@@ -2401,7 +2642,43 @@ export default function Dashboard() {
                           <span className="stat-value">{dashboardData.stats?.totalEmployees}</span>
                           <span style={{ fontSize: '0.9rem', color: 'var(--success)' }}>({dashboardData.stats?.activeEmployees} activos)</span>
                         </div>
-                        <span className="stat-footer">Colaboradores registrados</span>
+                        <span className="stat-footer" style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '0.78rem', marginTop: '0.25rem' }}>
+                          {dashboardData.allDepartments
+                            ?.filter(dept => {
+                              const name = dept.name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+                              return !name.includes('autonomo') && !name.includes('mxo') && !name.includes('instalador');
+                            })
+                            ?.map(dept => (
+                              <span key={dept.id}>
+                                {dept.name}: <strong>{dashboardData.allEmployees?.filter(emp => emp.department_id === dept.id && emp.role !== 'external_worker').length || 0}</strong>
+                              </span>
+                            ))
+                          }
+                        </span>
+                      </div>
+                      <div className="glass-panel stat-card" style={{ borderLeft: '4px solid #8b5cf6' }}>
+                        <span className="stat-title">Personal Externo</span>
+                        <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem' }}>
+                          <span className="stat-value" style={{ color: '#a78bfa' }}>
+                            {dashboardData.allEmployees?.filter(emp => {
+                              if (emp.role !== 'external_worker') return false;
+                              const deptName = (emp.department_name || '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+                              return deptName.includes('autonomo') || deptName.includes('mxo') || deptName.includes('instalador');
+                            }).length || 0}
+                          </span>
+                          <span style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>personas</span>
+                        </div>
+                        <span className="stat-footer" style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '0.78rem', marginTop: '0.25rem' }}>
+                          <span>
+                            Autónomos: <strong>{dashboardData.allEmployees?.filter(emp => emp.role === 'external_worker' && (emp.department_name || '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").includes('autonomo')).length || 0}</strong>
+                          </span>
+                          <span>
+                            MXO: <strong>{dashboardData.allEmployees?.filter(emp => emp.role === 'external_worker' && (emp.department_name || '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").includes('mxo')).length || 0}</strong>
+                          </span>
+                          <span>
+                            Instaladores: <strong>{dashboardData.allEmployees?.filter(emp => emp.role === 'external_worker' && (emp.department_name || '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").includes('instalador')).length || 0}</strong>
+                          </span>
+                        </span>
                       </div>
                       <div className="glass-panel stat-card success">
                         <span className="stat-title">Vacaciones</span>
@@ -3461,6 +3738,25 @@ export default function Dashboard() {
                     <button 
                       type="button"
                       className="btn" 
+                      onClick={() => setSettingsTab('teams')}
+                      style={{ 
+                        flex: 1, 
+                        minWidth: '120px',
+                        background: settingsTab === 'teams' ? 'var(--primary-glow)' : 'transparent',
+                        color: settingsTab === 'teams' ? 'var(--primary-light)' : 'var(--text-secondary)',
+                        fontWeight: '700',
+                        borderRadius: '10px',
+                        padding: '0.6rem 1rem',
+                        border: 'none',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s ease'
+                      }}
+                    >
+                      🧩 Equipos
+                    </button>
+                    <button 
+                      type="button"
+                      className="btn" 
                       onClick={() => setSettingsTab('rrhh')}
                       style={{ 
                         flex: 1, 
@@ -3534,6 +3830,25 @@ export default function Dashboard() {
                     >
                       🦺 EPIs
                     </button>
+                    <button 
+                      type="button"
+                      className="btn" 
+                      onClick={() => setSettingsTab('audit')}
+                      style={{ 
+                        flex: 1, 
+                        minWidth: '120px',
+                        background: settingsTab === 'audit' ? 'var(--primary-glow)' : 'transparent',
+                        color: settingsTab === 'audit' ? 'var(--primary-light)' : 'var(--text-secondary)',
+                        fontWeight: '700',
+                        borderRadius: '10px',
+                        padding: '0.6rem 1rem',
+                        border: 'none',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s ease'
+                      }}
+                    >
+                      🛡️ Auditoría
+                    </button>
                   </div>
 
                   {/* SUB-TAB 1: EMPLOYEES */}
@@ -3569,12 +3884,27 @@ export default function Dashboard() {
                           <select 
                             className="form-input" 
                             value={employeeDeptFilter}
-                            onChange={e => setEmployeeDeptFilter(e.target.value)}
+                            onChange={e => { setEmployeeDeptFilter(e.target.value); setEmployeeTeamFilter(''); }}
                           >
                             <option value="">🏢 Todos los departamentos</option>
                             {dashboardData.allDepartments?.map(dept => (
                               <option key={dept.id} value={dept.id.toString()}>{dept.name}</option>
                             ))}
+                          </select>
+                        </div>
+                        <div style={{ minWidth: '200px' }}>
+                          <select 
+                            className="form-input" 
+                            value={employeeTeamFilter}
+                            onChange={e => setEmployeeTeamFilter(e.target.value)}
+                          >
+                            <option value="">🧩 Todos los equipos</option>
+                            {dashboardData.allTeams
+                              ?.filter(t => !employeeDeptFilter || t.department_id?.toString() === employeeDeptFilter)
+                              ?.map(team => (
+                                <option key={team.id} value={team.id.toString()}>{team.name}</option>
+                              ))
+                            }
                           </select>
                         </div>
                       </div>
@@ -3585,11 +3915,12 @@ export default function Dashboard() {
                           gap: '1.5rem',
                           padding: '0.5rem 0'
                         }}>
-                          {dashboardData.allEmployees?.filter(emp => {
+                          {dashboardData.allEmployees?.filter(emp => emp.role !== 'external_worker').filter(emp => {
                             const matchesSearch = emp.name.toLowerCase().includes(employeeSearch.toLowerCase()) || 
                                                   emp.email.toLowerCase().includes(employeeSearch.toLowerCase());
                             const matchesDept = !employeeDeptFilter || emp.department_id?.toString() === employeeDeptFilter;
-                            return matchesSearch && matchesDept;
+                            const matchesTeam = !employeeTeamFilter || emp.team_id?.toString() === employeeTeamFilter;
+                            return matchesSearch && matchesDept && matchesTeam;
                           }).sort((a, b) => a.name.localeCompare(b.name)).map(emp => {
                             const nameParts = emp.name.trim().split(/\s+/);
                             const initials = nameParts.length > 1 
@@ -3773,6 +4104,69 @@ export default function Dashboard() {
                                       Editar
                                     </button>
                                     <button className="btn btn-danger" style={{ padding: '0.4rem 0.8rem' }} onClick={() => deleteDepartment(dept.id)}>
+                                      Eliminar
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* SUB-TAB: TEAMS */}
+                  {settingsTab === 'teams' && (
+                    <div className="glass-panel">
+                      <div className="panel-header">
+                        <h2 className="panel-title">🧩 Equipos de la Empresa</h2>
+                        <button className="btn btn-primary" onClick={openAddTeam}>
+                          + Nuevo Equipo
+                        </button>
+                      </div>
+                      <div className="panel-body custom-table-wrapper">
+                        <table className="custom-table">
+                          <thead>
+                            <tr>
+                              <th>Nombre</th>
+                              <th>Departamento</th>
+                              <th>Coordinador / Jefe de Equipo</th>
+                              <th>Miembros del Equipo</th>
+                              <th style={{ textAlign: 'right' }}>Acciones</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {dashboardData.allTeams?.map(team => (
+                              <tr key={team.id}>
+                                <td style={{ fontWeight: '600', fontSize: '1rem' }}>{team.name}</td>
+                                <td>
+                                  <span style={{ fontWeight: '500' }}>{team.department_name}</span>
+                                </td>
+                                <td>
+                                  {team.coordinator_name ? (
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                      <span style={{ fontWeight: '500' }}>{team.coordinator_name}</span>
+                                      <span className="badge badge-coordinator" style={{ fontSize: '0.7rem' }}>Coordinador</span>
+                                    </div>
+                                  ) : (
+                                    <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>Sin Coordinador</span>
+                                  )}
+                                </td>
+                                <td>
+                                  <span style={{ padding: '0.2rem 0.5rem', background: 'rgba(255,255,255,0.05)', borderRadius: '4px', border: '1px solid var(--border-color)', fontWeight: 'bold' }}>
+                                    {team.employee_count} emp.
+                                  </span>
+                                </td>
+                                <td style={{ textAlign: 'right' }}>
+                                  <div style={{ display: 'inline-flex', gap: '0.5rem' }}>
+                                    <button className="btn btn-secondary" style={{ padding: '0.4rem 0.8rem', background: 'rgba(59, 130, 246, 0.08)', color: '#3b82f6', border: '1px solid rgba(59, 130, 246, 0.2)' }} onClick={() => openManageTeamWorkers(team)}>
+                                      👥 Personal
+                                    </button>
+                                    <button className="btn btn-secondary" style={{ padding: '0.4rem 0.8rem' }} onClick={() => openEditTeam(team)}>
+                                      Editar
+                                    </button>
+                                    <button className="btn btn-danger" style={{ padding: '0.4rem 0.8rem' }} onClick={() => deleteTeam(team.id)}>
                                       Eliminar
                                     </button>
                                   </div>
@@ -5195,6 +5589,102 @@ export default function Dashboard() {
                       </div>
                     </div>
                   )}
+
+                  {/* SUB-TAB 7: AUDIT LOGS */}
+                  {settingsTab === 'audit' && (
+                    <div className="glass-panel" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                      <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.75rem' }}>
+                        <h2 className="panel-title" style={{ margin: 0 }}>🛡️ Auditoría e Historial de Modificaciones</h2>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                          <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Filtrar Recurso:</span>
+                          <select
+                            id="audit_target_filter"
+                            className="selector-dropdown"
+                            style={{ padding: '0.35rem 0.75rem', fontSize: '0.9rem', borderRadius: '8px' }}
+                            value={auditTargetFilter}
+                            onChange={e => setAuditTargetFilter(e.target.value)}
+                          >
+                            <option value="">Todos los recursos</option>
+                            <option value="employee">Empleado</option>
+                            <option value="request">Solicitud</option>
+                            <option value="shift_assignment">Planificación de Turno</option>
+                            <option value="time_record">Ajuste de Saldo</option>
+                            <option value="department">Departamento</option>
+                          </select>
+                        </div>
+                      </div>
+                      
+                      {auditLoading ? (
+                        <div style={{ display: 'flex', justifyContent: 'center', padding: '3rem' }}>
+                          <div style={{ width: '30px', height: '30px', borderRadius: '50%', border: '3px solid rgba(255,255,255,0.1)', borderTopColor: 'var(--primary)', animation: 'spin 1s linear infinite' }}></div>
+                        </div>
+                      ) : auditLogs.length === 0 ? (
+                        <div style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>
+                          No se han encontrado registros de auditoría.
+                        </div>
+                      ) : (
+                        <div className="custom-table-wrapper" style={{ maxHeight: '550px', overflowY: 'auto' }}>
+                          <table className="custom-table" style={{ fontSize: '0.88rem' }}>
+                            <thead>
+                              <tr>
+                                <th style={{ padding: '0.4rem 0.5rem' }}>Fecha/Hora</th>
+                                <th style={{ padding: '0.4rem 0.5rem' }}>Autor</th>
+                                <th style={{ padding: '0.4rem 0.5rem' }}>Acción</th>
+                                <th style={{ padding: '0.4rem 0.5rem' }}>Recurso</th>
+                                <th style={{ padding: '0.4rem 0.5rem' }}>ID</th>
+                                <th style={{ padding: '0.4rem 0.5rem' }}>Detalle</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {auditLogs.map(log => (
+                                <tr key={log.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                                  <td style={{ padding: '0.4rem 0.5rem', whiteSpace: 'nowrap', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+                                    {new Date(log.created_at).toLocaleString('es-ES', { dateStyle: 'short', timeStyle: 'short' })}
+                                  </td>
+                                  <td style={{ padding: '0.4rem 0.5rem', fontWeight: '500' }}>
+                                    {log.actor_name || 'Sistema'}
+                                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{log.actor_email || ''}</div>
+                                  </td>
+                                  <td style={{ padding: '0.4rem 0.5rem', whiteSpace: 'nowrap' }}>
+                                    <span className={`badge`} style={{
+                                      padding: '0.15rem 0.45rem',
+                                      fontSize: '0.73rem',
+                                      fontWeight: '700',
+                                      borderRadius: '4px',
+                                      backgroundColor: log.action === 'CREATE' ? 'rgba(52, 211, 153, 0.15)' :
+                                                      log.action === 'UPDATE' || log.action === 'APPROVE' ? 'rgba(59, 130, 246, 0.15)' :
+                                                      'rgba(239, 68, 68, 0.15)',
+                                      color: log.action === 'CREATE' ? '#34d399' :
+                                             log.action === 'UPDATE' || log.action === 'APPROVE' ? '#60a5fa' :
+                                             '#f87171',
+                                      border: log.action === 'CREATE' ? '1px solid rgba(52, 211, 153, 0.3)' :
+                                              log.action === 'UPDATE' || log.action === 'APPROVE' ? '1px solid rgba(59, 130, 246, 0.3)' :
+                                              '1px solid rgba(239, 68, 68, 0.3)'
+                                    }}>
+                                      {log.action}
+                                    </span>
+                                  </td>
+                                  <td style={{ padding: '0.4rem 0.5rem', textTransform: 'capitalize', color: 'var(--text-secondary)', fontWeight: '600' }}>
+                                    {log.target_type === 'employee' ? 'Empleado' :
+                                     log.target_type === 'request' ? 'Solicitud' :
+                                     log.target_type === 'shift_assignment' ? 'Planificación Turno' :
+                                     log.target_type === 'time_record' ? 'Ajuste Saldo' :
+                                     log.target_type === 'department' ? 'Departamento' : log.target_type}
+                                  </td>
+                                  <td style={{ padding: '0.4rem 0.5rem', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                                    #{log.target_id || '-'}
+                                  </td>
+                                  <td style={{ padding: '0.4rem 0.5rem', color: 'var(--text-primary)', wordBreak: 'break-word', maxWidth: '350px' }}>
+                                    {log.details}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -5226,7 +5716,7 @@ export default function Dashboard() {
                             className="selector-dropdown"
                             style={{ padding: '0.35rem 0.75rem', fontSize: '0.9rem', borderRadius: '8px' }}
                             value={schedDeptFilter}
-                            onChange={e => setSchedDeptFilter(e.target.value)}
+                            onChange={e => { setSchedDeptFilter(e.target.value); setSchedTeamFilter(''); }}
                           >
                             <option value="">🏢 Todos los departamentos</option>
                             {dashboardData.user.role === 'admin' ? (
@@ -5237,6 +5727,40 @@ export default function Dashboard() {
                               dashboardData.managedDepartments?.map(d => (
                                 <option key={d.id} value={d.id.toString()}>{d.name}</option>
                               ))
+                            )}
+                          </select>
+                        </div>
+                      )}
+
+                      {/* Team Filter for Planning view */}
+                      {(dashboardData.user.role === 'admin' || dashboardData.user.role === 'coordinator') && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <select
+                            id="planificacion_team_filter"
+                            name="planificacion_team_filter"
+                            className="selector-dropdown"
+                            style={{ padding: '0.35rem 0.75rem', fontSize: '0.9rem', borderRadius: '8px' }}
+                            value={schedTeamFilter}
+                            onChange={e => setSchedTeamFilter(e.target.value)}
+                          >
+                            <option value="">🧩 Todos los equipos</option>
+                            {dashboardData.user.role === 'admin' ? (
+                              dashboardData.allTeams
+                                ?.filter(t => !schedDeptFilter || t.department_id?.toString() === schedDeptFilter)
+                                ?.map(t => (
+                                  <option key={t.id} value={t.id.toString()}>{t.name}</option>
+                                ))
+                            ) : (
+                              dashboardData.allTeams
+                                ?.filter(t => {
+                                  const managedIds = dashboardData.user.managed_department_ids || [];
+                                  const matchesManaged = managedIds.includes(t.department_id);
+                                  const matchesDept = !schedDeptFilter || t.department_id?.toString() === schedDeptFilter;
+                                  return matchesManaged && matchesDept;
+                                })
+                                ?.map(t => (
+                                  <option key={t.id} value={t.id.toString()}>{t.name}</option>
+                                ))
                             )}
                           </select>
                         </div>
@@ -5385,7 +5909,7 @@ export default function Dashboard() {
                     <table className="custom-table" style={{ tableLayout: 'fixed', minWidth: '1000px', userSelect: 'none' }}>
                       <thead>
                         <tr>
-                          <th style={{ width: '220px', minWidth: '220px', position: 'sticky', left: 0, zIndex: 10, backgroundColor: 'var(--bg-modal)', borderRight: '2px solid var(--border-color)', color: 'var(--text-primary)' }}>
+                          <th style={{ width: '180px', minWidth: '180px', position: 'sticky', left: 0, zIndex: 10, backgroundColor: 'var(--bg-modal)', borderRight: '2px solid var(--border-color)', color: 'var(--text-primary)' }}>
                             Empleado
                           </th>
                           {Array.from({ length: getDaysInMonth(schedYear, schedMonth) }).map((_, idx) => {
@@ -5404,8 +5928,8 @@ export default function Dashboard() {
                                   textAlign: 'center', 
                                   padding: '0.5rem 0.25rem', 
                                   fontSize: '0.8rem',
-                                  width: '38px',
-                                  minWidth: '38px',
+                                  width: '30px',
+                                  minWidth: '30px',
                                   backgroundColor: isNationalHoliday ? 'rgba(239, 68, 68, 0.3)' : (isWeekend ? 'rgba(255, 255, 255, 0.04)' : 'transparent'),
                                   color: isNationalHoliday ? '#fca5a5' : (isWeekend ? 'var(--warning)' : 'var(--text-secondary)'),
                                   borderBottom: isNationalHoliday ? '2px solid #ef4444' : '1px solid var(--border-color)',
@@ -5467,6 +5991,11 @@ export default function Dashboard() {
                           // Filter list by selected department
                           if (schedDeptFilter) {
                             list = list.filter(emp => emp.department_id?.toString() === schedDeptFilter);
+                          }
+
+                          // Filter list by selected team
+                          if (schedTeamFilter) {
+                            list = list.filter(emp => emp.team_id?.toString() === schedTeamFilter);
                           }
 
                           // Apply custom order from planningEmployeeOrder
@@ -5558,7 +6087,8 @@ export default function Dashboard() {
                                     whiteSpace: 'nowrap',
                                     textOverflow: 'ellipsis',
                                     color: isDeBaja ? (isLightTheme ? '#64748b' : '#94a3b8') : 'var(--text-primary)',
-                                    cursor: isPlanningEditMode && dashboardData.user.role !== 'employee' ? 'grab' : (dashboardData?.user?.role === 'admin' ? 'pointer' : 'default')
+                                    cursor: isPlanningEditMode && dashboardData.user.role !== 'employee' ? 'grab' : (dashboardData?.user?.role === 'admin' ? 'pointer' : 'default'),
+                                    padding: '0.25rem 0.5rem'
                                   }}
                                 >
                                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
@@ -5622,7 +6152,7 @@ export default function Dashboard() {
                                       }}
                                       style={{
                                         padding: 0,
-                                        height: '42px',
+                                        height: '30px',
                                         backgroundColor: isDeBaja
                                           ? (isLightTheme ? '#f1f5f9' : '#1e293b')
                                           : (isNationalHoliday 
@@ -5789,13 +6319,51 @@ export default function Dashboard() {
                           🦺 Solicitar Nuevo EPI
                         </h3>
                         <form onSubmit={submitEpiRequest} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                          {dashboardData.user.role === 'admin' && (
+                            <>
+                              <div className="form-group" style={{ margin: 0 }}>
+                                <label className="form-label" style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>DEPARTAMENTO</label>
+                                <select
+                                  className="selector-dropdown"
+                                  style={{ width: '100%', padding: '0.75rem' }}
+                                  value={epiRequestForm.target_dept_id}
+                                  onChange={e => setEpiRequestForm({ ...epiRequestForm, target_dept_id: e.target.value, target_employee_id: '' })}
+                                >
+                                  <option value="">-- Todos los departamentos --</option>
+                                  {dashboardData.allDepartments?.map(d => (
+                                    <option key={d.id} value={d.id.toString()}>{d.name}</option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div className="form-group" style={{ margin: 0 }}>
+                                <label className="form-label" style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>EMPLEADO</label>
+                                <select
+                                  className="selector-dropdown"
+                                  style={{ width: '100%', padding: '0.75rem' }}
+                                  value={epiRequestForm.target_employee_id}
+                                  onChange={e => setEpiRequestForm({ ...epiRequestForm, target_employee_id: e.target.value })}
+                                  required
+                                >
+                                  <option value="">-- Elige empleado --</option>
+                                  {dashboardData.allEmployees
+                                    ?.filter(emp => !epiRequestForm.target_dept_id || emp.department_id?.toString() === epiRequestForm.target_dept_id)
+                                    .map(emp => (
+                                      <option key={emp.id} value={emp.id.toString()}>
+                                        {emp.name} {emp.role === 'external_worker' ? '🧩 (Externo / Operario)' : ''}
+                                      </option>
+                                    ))
+                                  }
+                                </select>
+                              </div>
+                            </>
+                          )}
                           <div className="form-group" style={{ margin: 0 }}>
                             <label className="form-label" style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>SELECCIONAR EQUIPO</label>
                             <select
                               className="selector-dropdown"
                               style={{ width: '100%', padding: '0.75rem' }}
                               value={epiRequestForm.type_id}
-                              onChange={e => setEpiRequestForm({ type_id: e.target.value, size_id: '' })}
+                              onChange={e => setEpiRequestForm({ ...epiRequestForm, type_id: e.target.value, size_id: '' })}
                               required
                             >
                               <option value="">-- Elige un EPI --</option>
@@ -5847,6 +6415,7 @@ export default function Dashboard() {
                                   <th>Talla</th>
                                   <th>Fecha Solicitud</th>
                                   <th>Estado</th>
+                                  <th>Acciones</th>
                                 </tr>
                               </thead>
                               <tbody>
@@ -5883,6 +6452,16 @@ export default function Dashboard() {
                                             PENDIENTE
                                           </span>
                                         )}
+                                      </td>
+                                      <td>
+                                        <button
+                                          type="button"
+                                          onClick={() => deleteEpiRequest(req.id)}
+                                          className="btn btn-danger"
+                                          style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem', borderRadius: '4px' }}
+                                        >
+                                          Eliminar
+                                        </button>
                                       </td>
                                     </tr>
                                   );
@@ -5984,6 +6563,16 @@ export default function Dashboard() {
                                                   <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
                                                     Por: {req.deliverer_name || 'Admin'} el {new Date(req.delivered_at).toLocaleDateString('es-ES')}
                                                   </span>
+                                                  {dashboardData.user.role === 'admin' && (
+                                                    <button
+                                                      type="button"
+                                                      onClick={() => deleteEpiRequest(req.id)}
+                                                      className="btn btn-danger"
+                                                      style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem', borderRadius: '4px', marginTop: '0.35rem', width: 'fit-content' }}
+                                                    >
+                                                      Eliminar
+                                                    </button>
+                                                  )}
                                                 </div>
                                               ) : (
                                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
@@ -6015,6 +6604,16 @@ export default function Dashboard() {
                                                         Entregar EPI
                                                       </button>
                                                     </>
+                                                  )}
+                                                  {dashboardData.user.role === 'admin' && (
+                                                    <button
+                                                      type="button"
+                                                      onClick={() => deleteEpiRequest(req.id)}
+                                                      className="btn btn-danger"
+                                                      style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem', borderRadius: '6px' }}
+                                                    >
+                                                      Eliminar
+                                                    </button>
                                                   )}
                                                 </div>
                                               )}
@@ -6332,10 +6931,12 @@ export default function Dashboard() {
                       </select>
                     </div>
 
-                    {(requestForm.hours_type === 'hours_register' || requestForm.hours_type === 'hours_festive' || requestForm.hours_type === 'hours_free') && (
+                    {(requestForm.hours_type === 'hours_register' || requestForm.hours_type === 'hours_festive' || requestForm.hours_type === 'hours_free' || requestForm.is_historical) && (
                       <div className="form-group">
                         <label className="form-label">
-                          {requestForm.hours_type === 'hours_free' ? 'Fecha del Día a Consumir' : 'Fecha del Día Trabajado'}
+                          {requestForm.is_historical 
+                            ? 'Fecha del Registro Histórico' 
+                            : (requestForm.hours_type === 'hours_free' ? 'Fecha del Día a Consumir' : 'Fecha del Día Trabajado')}
                         </label>
                         <input 
                           type="date" 
@@ -6348,7 +6949,7 @@ export default function Dashboard() {
                       </div>
                     )}
 
-                    {(requestForm.hours_type === 'hours_free' || requestForm.hours_type === 'hours_to_vacation' || requestForm.hours_type === 'hours_payroll') && (
+                    {(requestForm.hours_type === 'hours_free' || requestForm.hours_type === 'hours_to_vacation' || requestForm.hours_type === 'hours_payroll') && !requestForm.is_historical && (
                       <div className="form-group">
                         <label className="form-label" style={{ fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                           ⏰ Horas a usar de:
@@ -6436,7 +7037,7 @@ export default function Dashboard() {
                       </div>
                     )}
 
-                    {requestForm.hours_type !== 'hours_festive' && (requestForm.hours_type === 'hours_register') && (
+                    {requestForm.hours_type !== 'hours_festive' && (requestForm.hours_type === 'hours_register' || requestForm.is_historical) && (
                       <div className="form-group">
                         <label className="form-label">Horas</label>
                         <input 
@@ -7555,13 +8156,31 @@ export default function Dashboard() {
                       <select 
                         className="selector-dropdown"
                         value={empForm.department_id}
-                        onChange={e => setEmpForm({...empForm, department_id: e.target.value})}
+                        onChange={e => setEmpForm({...empForm, department_id: e.target.value, team_id: ''})}
                         disabled={dashboardData?.user?.role !== 'admin' && dashboardData?.user?.role !== 'coordinator'}
                       >
                         <option value="">Ninguno / Sin asignar</option>
                         {dashboardData?.user?.role === 'admin' 
                           ? dashboardData?.allDepartments?.map(d => <option key={d.id} value={d.id}>{d.name}</option>)
                           : dashboardData?.managedDepartments?.map(d => <option key={d.id} value={d.id}>{d.name}</option>)
+                        }
+                      </select>
+                    </div>
+
+                    <div className="form-group">
+                      <label className="form-label" style={{ fontSize: '0.72rem', letterSpacing: '0.5px' }}>EQUIPO</label>
+                      <select 
+                        className="selector-dropdown"
+                        value={empForm.team_id}
+                        onChange={e => setEmpForm({...empForm, team_id: e.target.value})}
+                        disabled={dashboardData?.user?.role !== 'admin' && dashboardData?.user?.role !== 'coordinator'}
+                      >
+                        <option value="">Ninguno / Sin asignar</option>
+                        {dashboardData?.allTeams
+                          ?.filter(team => team.department_id?.toString() === empForm.department_id?.toString())
+                          ?.map(t => (
+                            <option key={t.id} value={t.id}>{t.name}</option>
+                          ))
                         }
                       </select>
                     </div>
@@ -8016,6 +8635,138 @@ export default function Dashboard() {
         </div>
       )}
 
+      {/* Team Modal */}
+      {showTeamModal && (
+        <div className="modal-overlay">
+          <div className="modal-content">
+            <div className="panel-header">
+              <h3 className="panel-title">{editingTeam ? 'Editar Equipo' : 'Nuevo Equipo'}</h3>
+              <button className="btn btn-secondary" style={{ padding: '0.25rem 0.5rem' }} onClick={() => setShowTeamModal(false)}>✕</button>
+            </div>
+            <form onSubmit={saveTeam}>
+              <div className="panel-body">
+                <div className="form-group">
+                  <label className="form-label">Nombre del Equipo</label>
+                  <input 
+                    type="text" 
+                    className="form-input" 
+                    value={teamForm.name} 
+                    onChange={e => setTeamForm({...teamForm, name: e.target.value})} 
+                    required 
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Departamento</label>
+                  <select 
+                    className="selector-dropdown"
+                    value={teamForm.department_id}
+                    onChange={e => setTeamForm({...teamForm, department_id: e.target.value})}
+                    required
+                  >
+                    <option value="">Selecciona Departamento</option>
+                    {dashboardData?.allDepartments?.map(d => (
+                      <option key={d.id} value={d.id}>
+                        {d.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Coordinador / Jefe de Equipo</label>
+                  <select 
+                    className="selector-dropdown"
+                    value={teamForm.coordinator_id}
+                    onChange={e => setTeamForm({...teamForm, coordinator_id: e.target.value})}
+                  >
+                    <option value="">Sin Coordinador</option>
+                    {dashboardData?.potentialCoordinators?.map(c => (
+                      <option key={c.id} value={c.id}>
+                        {c.name} ({c.role === 'admin' ? 'Admin' : 'Coordinador'})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div className="panel-header" style={{ borderBottom: 'none', borderTop: '1px solid var(--border-color)', justifyContent: 'flex-end', gap: '0.75rem' }}>
+                <button type="button" className="btn btn-secondary" onClick={() => setShowTeamModal(false)}>Cancelar</button>
+                <button type="submit" className="btn btn-primary">Guardar</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Team Workers Management Modal */}
+      {showTeamWorkersModal && selectedTeamForWorkers && (
+        <div className="modal-overlay" style={{ zIndex: 1100 }}>
+          <div className="modal-content" style={{ maxWidth: '500px', width: '95%' }}>
+            <div className="panel-header">
+              <h3 className="panel-title">👥 Operarios / Personal de {selectedTeamForWorkers.name}</h3>
+              <button className="btn btn-secondary" style={{ padding: '0.25rem 0.5rem' }} onClick={() => setShowTeamWorkersModal(false)}>✕</button>
+            </div>
+            
+            {/* List current workers */}
+            <div className="panel-body" style={{ maxHeight: '300px', overflowY: 'auto', overflowX: 'hidden', borderBottom: '1px solid var(--border-color)', marginBottom: '1rem', padding: '1rem 0' }}>
+              <h4 style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Trabajadores actuales</h4>
+              {dashboardData.allEmployees?.filter(emp => emp.team_id === selectedTeamForWorkers.id && emp.role === 'external_worker').length === 0 ? (
+                <p style={{ fontStyle: 'italic', color: 'var(--text-muted)', margin: '1rem 0' }}>No hay trabajadores asignados a este equipo.</p>
+              ) : (
+                <table className="custom-table" style={{ width: '100%', minWidth: 'auto', tableLayout: 'fixed' }}>
+                  <thead>
+                    <tr>
+                      <th style={{ padding: '0.4rem 0.6rem' }}>Nombre</th>
+                      <th style={{ textAlign: 'right', padding: '0.4rem 0.6rem' }}>Acción</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dashboardData.allEmployees
+                      ?.filter(emp => emp.team_id === selectedTeamForWorkers.id && emp.role === 'external_worker')
+                      ?.map(worker => (
+                        <tr key={worker.id}>
+                          <td style={{ fontWeight: '600', padding: '0.5rem 0.6rem' }}>{worker.name}</td>
+                          <td style={{ textAlign: 'right', padding: '0.5rem 0.6rem' }}>
+                            <button className="btn btn-danger" style={{ padding: '0.25rem 0.5rem', fontSize: '0.8rem' }} onClick={() => removeTeamWorker(worker.id)}>
+                              Quitar
+                            </button>
+                          </td>
+                        </tr>
+                      ))
+                    }
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            {/* Add new worker form */}
+            <form onSubmit={addTeamWorker} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <div className="panel-body" style={{ padding: 0 }}>
+                <h4 style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Añadir operario</h4>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label className="form-label" style={{ fontSize: '0.75rem' }}>Nombre Completo</label>
+                    <input 
+                      type="text" 
+                      className="form-input" 
+                      value={teamWorkerForm.name} 
+                      onChange={e => setTeamWorkerForm({ ...teamWorkerForm, name: e.target.value })} 
+                      placeholder="Ej. Carlos Ortiz"
+                      required 
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="panel-header" style={{ borderBottom: 'none', borderTop: '1px solid var(--border-color)', justifyContent: 'flex-end', gap: '0.75rem', padding: '1rem 0 0 0', marginTop: '0.5rem' }}>
+                <button type="button" className="btn btn-secondary" onClick={() => setShowTeamWorkersModal(false)}>Cerrar</button>
+                <button type="submit" className="btn btn-primary">+ Añadir al Equipo</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Sick Leave Employees Modal */}
       {showSickLeaveModal && (
         <div className="modal-overlay" style={{ zIndex: 1100 }}>
@@ -8205,6 +8956,34 @@ export default function Dashboard() {
               empList = empList.filter(emp => emp.department_id?.toString() === schedDeptFilter);
             }
 
+            if (schedTeamFilter) {
+              empList = empList.filter(emp => emp.team_id?.toString() === schedTeamFilter);
+            }
+
+            const relevantRequests = (() => {
+              const role = dashboardData.user.role;
+              if (role === 'admin') {
+                return [
+                  ...(dashboardData.allPendingRequests || []),
+                  ...(dashboardData.allResolvedRequests || []),
+                  ...(dashboardData.pendingRequests || []),
+                  ...(dashboardData.resolvedRequests || [])
+                ];
+              } else if (role === 'coordinator') {
+                return [
+                  ...(dashboardData.teamPendingRequests || []),
+                  ...(dashboardData.teamResolvedRequests || []),
+                  ...(dashboardData.pendingRequests || []),
+                  ...(dashboardData.resolvedRequests || [])
+                ];
+              } else {
+                return [
+                  ...(dashboardData.pendingRequests || []),
+                  ...(dashboardData.resolvedRequests || [])
+                ];
+              }
+            })();
+
             return (
               <div key={`${year}-${month}`} className="print-sheet">
                 <div style={{ borderBottom: '2px solid #000', paddingBottom: '5px', marginBottom: '15px' }}>
@@ -8213,16 +8992,17 @@ export default function Dashboard() {
                       ? '📅 Planificación de Turnos' 
                       : `📅 Planificación Turnos del Departamento "${dashboardData?.user?.department_name || 'Sin Departamento'}"`
                     } — {getMonthName(month)} {year}
-                  </h1>
+                   </h1>
                   <div style={{ fontSize: '0.8rem', color: '#666', marginTop: '2px' }}>
                     Filtro: {schedDeptFilter ? (dashboardData.allDepartments?.find(d => d.id.toString() === schedDeptFilter)?.name || 'Departamento') : 'Todos los departamentos'}
+                    {schedTeamFilter && ` | Equipo: ${dashboardData.allTeams?.find(t => t.id.toString() === schedTeamFilter)?.name || 'Equipo'}`}
                   </div>
                 </div>
 
                 <table className="custom-table" style={{ width: '100%', tableLayout: 'auto', borderCollapse: 'collapse' }}>
                   <thead>
                     <tr>
-                      <th style={{ width: '130px', minWidth: '130px', textAlign: 'left', border: '1px solid #000', padding: '4px' }}>
+                      <th style={{ width: '130px', minWidth: '130px', textAlign: 'left', border: '1px solid #000', padding: '2px 4px', fontSize: '0.65rem' }}>
                         Empleado
                       </th>
                       {Array.from({ length: daysInMonth }).map((_, idx) => {
@@ -8235,7 +9015,7 @@ export default function Dashboard() {
                             key={dayNum}
                             style={{ 
                               textAlign: 'center', 
-                              padding: '4px 2px', 
+                              padding: '2px 1px', 
                               fontSize: '0.65rem',
                               border: '1px solid #000',
                               backgroundColor: isWeekend ? '#f3f4f6' : 'transparent',
@@ -8251,10 +9031,10 @@ export default function Dashboard() {
                   </thead>
                   <tbody>
                     {empList.map(emp => (
-                      <tr key={emp.id}>
-                        <td style={{ fontWeight: 'bold', border: '1px solid #000', padding: '2px 4px', fontSize: '0.6rem', width: '130px', whiteSpace: 'normal', wordBreak: 'break-word', height: '18px' }}>
+                      <tr key={emp.id} style={{ height: '14px' }}>
+                        <td style={{ fontWeight: 'bold', border: '1px solid #000', padding: '1px 3px', fontSize: '0.58rem', width: '130px', whiteSpace: 'normal', wordBreak: 'break-word', height: '14px', lineHeight: '1.1' }}>
                           <div>{emp.name}</div>
-                          <div style={{ fontSize: '0.5rem', color: '#666', fontWeight: 'normal', lineHeight: '1' }}>{emp.department_name || 'Sin departamento'}</div>
+                          <div style={{ fontSize: '0.48rem', color: '#666', fontWeight: 'normal', lineHeight: '1' }}>{emp.department_name || 'Sin departamento'}</div>
                         </td>
                         {Array.from({ length: daysInMonth }).map((_, idx) => {
                           const dayNum = idx + 1;
@@ -8262,26 +9042,54 @@ export default function Dashboard() {
                           const cellKey = `${emp.id}_${dateStr}`;
                           const assignedShift = assignments[cellKey];
                           const dateObj = new Date(year, month, dayNum);
+                          dateObj.setHours(0,0,0,0);
                           const isWeekend = dateObj.getDay() === 0 || dateObj.getDay() === 6;
+
+                          const reqOnDay = relevantRequests.find(r => {
+                            if (r.employee_id !== emp.id) return false;
+                            if (r.status !== 'approved' && r.status !== 'pending') return false;
+                            if (!r.start_date) return false;
+                            const start = new Date(r.start_date);
+                            start.setHours(0,0,0,0);
+                            const end = r.end_date ? new Date(r.end_date) : start;
+                            end.setHours(0,0,0,0);
+                            return dateObj >= start && dateObj <= end;
+                          });
+
+                          const cellBgColor = reqOnDay 
+                            ? (reqOnDay.absence_type_name === 'Vacaciones' 
+                                ? '#dbeafe' 
+                                : (reqOnDay.absence_type_name && reqOnDay.absence_type_name.toLowerCase().includes('baja') 
+                                    ? '#fee2e2' 
+                                    : '#d1fae5'))
+                            : (assignedShift ? assignedShift.color : (isWeekend ? '#f3f4f6' : 'transparent'));
+
+                          const cellLabel = reqOnDay
+                            ? (reqOnDay.type === 'hours_free' 
+                                ? 'LIBRE' 
+                                : (reqOnDay.absence_type_name === 'Vacaciones' 
+                                    ? 'VAC' 
+                                    : (reqOnDay.absence_type_name && reqOnDay.absence_type_name.toLowerCase().includes('baja') 
+                                        ? 'BAJA' 
+                                        : 'AUS')))
+                            : (assignedShift ? assignedShift.name.charAt(0).toUpperCase() : '');
 
                           return (
                             <td 
                               key={dayNum}
                               style={{ 
                                 padding: 0,
-                                height: '18px',
+                                height: '14px',
                                 border: '1px solid #000',
-                                backgroundColor: assignedShift ? assignedShift.color : (isWeekend ? '#f3f4f6' : 'transparent'),
+                                backgroundColor: cellBgColor,
                                 textAlign: 'center',
                                 verticalAlign: 'middle',
-                                fontSize: '0.55rem'
+                                fontSize: '0.55rem',
+                                color: '#000',
+                                fontWeight: 'bold'
                               }}
                             >
-                              {assignedShift && (
-                                <span style={{ fontWeight: 'bold', color: '#000' }}>
-                                  {assignedShift.name.charAt(0).toUpperCase()}
-                                </span>
-                              )}
+                              {cellLabel}
                             </td>
                           );
                         })}

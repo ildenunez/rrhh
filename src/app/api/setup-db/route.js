@@ -17,13 +17,19 @@ export async function GET() {
         id SERIAL PRIMARY KEY,
         name VARCHAR(100) NOT NULL,
         email VARCHAR(100) UNIQUE NOT NULL,
-        role VARCHAR(20) NOT NULL CHECK (role IN ('employee', 'coordinator', 'admin')),
+        role VARCHAR(20) NOT NULL CHECK (role IN ('employee', 'coordinator', 'admin', 'external_worker')),
         department_id INT REFERENCES departments(id) ON DELETE SET NULL,
         vacation_days INT NOT NULL DEFAULT 30,
         extra_hours DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
         password_hash VARCHAR(100) NOT NULL,
         birth_date DATE DEFAULT NULL
       );
+    `);
+
+    // Ensure constraint is updated if table already existed
+    await query(`
+      ALTER TABLE employees DROP CONSTRAINT IF EXISTS employees_role_check;
+      ALTER TABLE employees ADD CONSTRAINT employees_role_check CHECK (role IN ('employee', 'coordinator', 'admin', 'external_worker'));
     `);
 
     await query(`
@@ -35,7 +41,8 @@ export async function GET() {
         amount DECIMAL(10, 2) NOT NULL,
         remaining_amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
         observation TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        request_id INT REFERENCES requests(id) ON DELETE CASCADE
       );
     `);
 
@@ -256,6 +263,33 @@ export async function GET() {
         status IN ('pending', 'requested', 'delivered')
       );
     `);
+
+    // Create audit_logs table
+    await query(`
+      CREATE TABLE IF NOT EXISTS audit_logs (
+        id SERIAL PRIMARY KEY,
+        actor_id INT REFERENCES employees(id) ON DELETE SET NULL,
+        action VARCHAR(50) NOT NULL,
+        target_type VARCHAR(50) NOT NULL,
+        target_id INT,
+        details TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // Create teams table
+    await query(`
+      CREATE TABLE IF NOT EXISTS teams (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(100) NOT NULL,
+        department_id INT NOT NULL REFERENCES departments(id) ON DELETE CASCADE,
+        coordinator_id INT REFERENCES employees(id) ON DELETE SET NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // Add team_id to employees
+    await query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS team_id INT REFERENCES teams(id) ON DELETE SET NULL;`);
 
     // Add constraint for status check
     await query(`ALTER TABLE requests DROP CONSTRAINT IF EXISTS requests_status_check;`);

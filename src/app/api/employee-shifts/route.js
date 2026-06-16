@@ -1,4 +1,5 @@
 import { query } from '@/lib/db';
+import { logAudit } from '@/lib/audit';
 import { NextResponse } from 'next/server';
 
 // GET employee shift assignments
@@ -64,7 +65,7 @@ export async function GET(request) {
 // POST update employee shift assignments (bulk/single)
 export async function POST(request) {
   try {
-    const { userId, assignments } = await request.json();
+    const { userId, assignments, actor_id } = await request.json();
 
     if (!userId || !Array.isArray(assignments)) {
       return NextResponse.json({ error: "userId y array de assignments son requeridos" }, { status: 400 });
@@ -110,6 +111,7 @@ export async function POST(request) {
           DELETE FROM employee_shifts 
           WHERE employee_id = $1 AND date = $2
         `, [employee_id, date]);
+        await logAudit(actor_id || userId, 'DELETE', 'shift_assignment', employee_id, `Eliminado turno del día ${date} para empleado ID ${employee_id}`);
       } else {
         // Upsert shift assignment
         await query(`
@@ -118,6 +120,7 @@ export async function POST(request) {
           ON CONFLICT (employee_id, date)
           DO UPDATE SET shift_id = EXCLUDED.shift_id
         `, [employee_id, date, shift_id]);
+        await logAudit(actor_id || userId, 'UPDATE', 'shift_assignment', employee_id, `Asignado turno ID ${shift_id} el día ${date} al empleado ID ${employee_id}`);
       }
     }
 

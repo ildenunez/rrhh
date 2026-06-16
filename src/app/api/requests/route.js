@@ -1,4 +1,5 @@
 import { query } from '@/lib/db';
+import { logAudit } from '@/lib/audit';
 import { NextResponse } from 'next/server';
 
 // helper: calculate days difference inclusive
@@ -25,7 +26,7 @@ export async function POST(request) {
     let parsedAmount = amount ? parseFloat(amount) : 0;
 
     // Fetch employee details to check role/balances
-    const empResult = await query(`SELECT role, vacation_days, extra_hours FROM employees WHERE id = $1`, [parsedEmployeeId]);
+    const empResult = await query(`SELECT role, vacation_days, extra_hours, name FROM employees WHERE id = $1`, [parsedEmployeeId]);
     if (empResult.rows.length === 0) {
       return NextResponse.json({ error: "Empleado no encontrado" }, { status: 404 });
     }
@@ -144,6 +145,10 @@ export async function POST(request) {
     // Trigger email simulation
     await checkAndSimulateEmail('request_created', newRequest);
 
+    // Write audit log
+    const actor = creator_id ? parseInt(creator_id) : parsedEmployeeId;
+    await logAudit(actor, isDirectApprove ? 'APPROVE' : 'CREATE', 'request', newRequest.id, `Solicitud de tipo ${type} creada para ${employee.name} (${amount ? amount : parsedAmount} unidades). Estado: ${status}`);
+
     return NextResponse.json({ success: true, request: newRequest });
   } catch (error) {
     console.error('Error posting request:', error);
@@ -163,7 +168,12 @@ export async function PUT(request) {
     const parsedId = parseInt(id);
     const parsedResolvedBy = parseInt(resolved_by);
 
-    const reqRes = await query(`SELECT * FROM requests WHERE id = $1`, [parsedId]);
+    const reqRes = await query(`
+      SELECT r.*, e.name AS employee_name 
+      FROM requests r 
+      JOIN employees e ON r.employee_id = e.id 
+      WHERE r.id = $1
+    `, [parsedId]);
     if (reqRes.rows.length === 0) {
       return NextResponse.json({ error: "Solicitud no encontrada" }, { status: 404 });
     }
@@ -190,6 +200,9 @@ export async function PUT(request) {
       // Trigger email simulation
       await checkAndSimulateEmail('request_resolved', updateRes.rows[0]);
 
+      // Write audit log
+      await logAudit(parsedResolvedBy, 'REJECT', 'request', parsedId, `Solicitud #${parsedId} de ${requestDetails.employee_name} RECHAZADA.`);
+
       return NextResponse.json({ success: true, request: updateRes.rows[0] });
     }
 
@@ -208,6 +221,9 @@ export async function PUT(request) {
 
     // Trigger email simulation
     await checkAndSimulateEmail('request_resolved', updateRes.rows[0]);
+
+    // Write audit log
+    await logAudit(parsedResolvedBy, 'APPROVE', 'request', parsedId, `Solicitud #${parsedId} de ${requestDetails.employee_name} APROBADA.`);
 
     return NextResponse.json({ success: true, request: updateRes.rows[0] });
   } catch (error) {
@@ -270,6 +286,7 @@ async function applyRequestBalanceChanges(req, triggerEmpId, action) {
 
 // Log actions in time_records only when request is officially approved
 async function createApprovedTransactionLogs(req, resolverId) {
+  const reqId = req.id;
   if (req.is_historical) {
     const empId = req.employee_id;
     const type = req.type;
@@ -277,14 +294,14 @@ async function createApprovedTransactionLogs(req, resolverId) {
     
     if (type === 'absence') {
       await query(`
-        INSERT INTO time_records (employee_id, created_by, type, amount, remaining_amount, observation)
-        VALUES ($1, $2, 'vacation', 0.00, 0.00, $3)
-      `, [empId, resolverId, `Ausencia histórica pre-autorizada (${req.start_date ? req.start_date.toString().split('T')[0] : ''} a ${req.end_date ? req.end_date.toString().split('T')[0] : ''}): ${observation || ''}`]);
+        INSERT INTO time_records (employee_id, created_by, type, amount, remaining_amount, observation, request_id)
+        VALUES ($1, $2, 'vacation', 0.00, 0.00, $3, $4)
+      `, [empId, resolverId, `Ausencia histórica pre-autorizada (${req.start_date ? req.start_date.toString().split('T')[0] : ''} a ${req.end_date ? req.end_date.toString().split('T')[0] : ''}): ${observation || ''}`, reqId]);
     } else {
       await query(`
-        INSERT INTO time_records (employee_id, created_by, type, amount, remaining_amount, observation)
-        VALUES ($1, $2, 'extra_hours', 0.00, 0.00, $3)
-      `, [empId, resolverId, `Registro histórico pre-autorizado (${observation || ''})`]);
+        INSERT INTO time_records (employee_id, created_by, type, amount, remaining_amount, observation, request_id)
+        VALUES ($1, $2, 'extra_hours', 0.00, 0.00, $3, $4)
+      `, [empId, resolverId, `Registro histórico pre-autorizado (${observation || ''})`, reqId]);
     }
     return;
   }
@@ -297,37 +314,37 @@ async function createApprovedTransactionLogs(req, resolverId) {
   if (type === 'absence') {
     if (amount < 0) {
       await query(`
-        INSERT INTO time_records (employee_id, created_by, type, amount, remaining_amount, observation)
-        VALUES ($1, $2, 'vacation', $3, 0.00, $4)
-      `, [empId, resolverId, amount, `Ausencia aprobada (${req.start_date.toString().split('T')[0]} a ${req.end_date.toString().split('T')[0]}): ${observation}`]);
+        INSERT INTO time_records (employee_id, created_by, type, amount, remaining_amount, observation, request_id)
+        VALUES ($1, $2, 'vacation', $3, 0.00, $4, $5)
+      `, [empId, resolverId, amount, `Ausencia aprobada (${req.start_date.toString().split('T')[0]} a ${req.end_date.toString().split('T')[0]}): ${observation}`, reqId]);
     } else {
       await query(`
-        INSERT INTO time_records (employee_id, created_by, type, amount, remaining_amount, observation)
-        VALUES ($1, $2, 'vacation', 0.00, 0.00, $3)
-      `, [empId, resolverId, `Ausencia justificada (${req.start_date.toString().split('T')[0]} a ${req.end_date.toString().split('T')[0]}): ${observation}`]);
+        INSERT INTO time_records (employee_id, created_by, type, amount, remaining_amount, observation, request_id)
+        VALUES ($1, $2, 'vacation', 0.00, 0.00, $3, $4)
+      `, [empId, resolverId, `Ausencia justificada (${req.start_date.toString().split('T')[0]} a ${req.end_date.toString().split('T')[0]}): ${observation}`, reqId]);
     }
   } else if (type === 'hours_register') {
     await query(`UPDATE employees SET extra_hours = extra_hours + $1 WHERE id = $2`, [amount, empId]);
 
     const formattedDate = req.start_date ? ` el ${req.start_date.toString().split('T')[0]}` : '';
     await query(`
-      INSERT INTO time_records (employee_id, created_by, type, amount, remaining_amount, observation)
-      VALUES ($1, $2, 'extra_hours', $3, $3, $4)
-    `, [empId, resolverId, amount, `Aprobado: Horas extras registradas${formattedDate} (${observation})`]);
+      INSERT INTO time_records (employee_id, created_by, type, amount, remaining_amount, observation, request_id)
+      VALUES ($1, $2, 'extra_hours', $3, $3, $4, $5)
+    `, [empId, resolverId, amount, `Aprobado: Horas extras registradas${formattedDate} (${observation})`, reqId]);
 
   } else if (type === 'hours_festive') {
     await query(`UPDATE employees SET vacation_days = vacation_days + 1, extra_hours = extra_hours + 4 WHERE id = $1`, [empId]);
 
     const formattedDate = req.start_date ? ` el ${req.start_date.toString().split('T')[0]}` : '';
     await query(`
-      INSERT INTO time_records (employee_id, created_by, type, amount, remaining_amount, observation)
-      VALUES ($1, $2, 'vacation', 1.00, 0.00, $3)
-    `, [empId, resolverId, `Festivo trabajado${formattedDate}: +1 día de vacaciones (${observation})`]);
+      INSERT INTO time_records (employee_id, created_by, type, amount, remaining_amount, observation, request_id)
+      VALUES ($1, $2, 'vacation', 1.00, 0.00, $3, $4)
+    `, [empId, resolverId, `Festivo trabajado${formattedDate}: +1 día de vacaciones (${observation})`, reqId]);
 
     await query(`
-      INSERT INTO time_records (employee_id, created_by, type, amount, remaining_amount, observation)
-      VALUES ($1, $2, 'extra_hours', 4.00, 4.00, $3)
-    `, [empId, resolverId, `Festivo trabajado${formattedDate}: +4 horas extras (${observation})`]);
+      INSERT INTO time_records (employee_id, created_by, type, amount, remaining_amount, observation, request_id)
+      VALUES ($1, $2, 'extra_hours', 4.00, 4.00, $3, $4)
+    `, [empId, resolverId, `Festivo trabajado${formattedDate}: +4 horas extras (${observation})`, reqId]);
 
   } else if (type === 'hours_free' || type === 'hours_to_vacation' || type === 'hours_payroll') {
     const absHours = Math.abs(amount);
@@ -335,9 +352,9 @@ async function createApprovedTransactionLogs(req, resolverId) {
     if (type === 'hours_to_vacation') {
       const addedVacations = Math.floor(absHours / 8);
       await query(`
-        INSERT INTO time_records (employee_id, created_by, type, amount, remaining_amount, observation)
-        VALUES ($1, $2, 'vacation', $3, 0.00, $4)
-      `, [empId, resolverId, addedVacations, `Canjeado: ${absHours}h extras por ${addedVacations}d de vacaciones`]);
+        INSERT INTO time_records (employee_id, created_by, type, amount, remaining_amount, observation, request_id)
+        VALUES ($1, $2, 'vacation', $3, 0.00, $4, $5)
+      `, [empId, resolverId, addedVacations, `Canjeado: ${absHours}h extras por ${addedVacations}d de vacaciones`, reqId]);
     }
 
     let desc = '';
@@ -349,15 +366,15 @@ async function createApprovedTransactionLogs(req, resolverId) {
       // Create detailed audit entries for each credit source if multiple
       for (let item of req.consumed_credits) {
         await query(`
-          INSERT INTO time_records (employee_id, created_by, type, amount, remaining_amount, observation)
-          VALUES ($1, $2, 'extra_hours', $3, 0.00, $4)
-        `, [empId, resolverId, -parseFloat(item.hours), `${desc} [Ficha #${item.record_id}]`]);
+          INSERT INTO time_records (employee_id, created_by, type, amount, remaining_amount, observation, request_id)
+          VALUES ($1, $2, 'extra_hours', $3, 0.00, $4, $5)
+        `, [empId, resolverId, -parseFloat(item.hours), `${desc} [Ficha #${item.record_id}]`, reqId]);
       }
     } else {
       await query(`
-        INSERT INTO time_records (employee_id, created_by, type, amount, remaining_amount, observation)
-        VALUES ($1, $2, 'extra_hours', $3, 0.00, $4)
-      `, [empId, resolverId, -absHours, desc]);
+        INSERT INTO time_records (employee_id, created_by, type, amount, remaining_amount, observation, request_id)
+        VALUES ($1, $2, 'extra_hours', $3, 0.00, $4, $5)
+      `, [empId, resolverId, -absHours, desc, reqId]);
     }
   }
 }
