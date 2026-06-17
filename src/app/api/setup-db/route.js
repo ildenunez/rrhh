@@ -8,7 +8,8 @@ export async function GET() {
       CREATE TABLE IF NOT EXISTS departments (
         id SERIAL PRIMARY KEY,
         name VARCHAR(100) UNIQUE NOT NULL,
-        coordinator_id INT
+        coordinator_id INT,
+        show_in_planning BOOLEAN NOT NULL DEFAULT TRUE
       );
     `);
 
@@ -150,13 +151,72 @@ export async function GET() {
         VALUES 
           ('request_created', 'Nueva solicitud de ausencia/horas', TRUE, TRUE, TRUE),
           ('request_resolved', 'Solicitud aprobada o rechazada', TRUE, FALSE, FALSE),
-          ('shift_changed', 'Asignación o cambio de turno', TRUE, FALSE, FALSE),
           ('epi_requested', 'Nueva solicitud de EPI', FALSE, TRUE, TRUE),
           ('epi_delivered', 'Entrega de EPI registrada', TRUE, FALSE, FALSE),
           ('announcement_created', 'Nuevo comunicado publicado en el muro', TRUE, TRUE, TRUE)
         ON CONFLICT (event_key) DO NOTHING;
       `);
     }
+
+    // Create smtp_settings table
+    await query(`
+      CREATE TABLE IF NOT EXISTS smtp_settings (
+        id SERIAL PRIMARY KEY,
+        host VARCHAR(255) DEFAULT '',
+        port INT DEFAULT 587,
+        smtp_user VARCHAR(255) DEFAULT '',
+        smtp_pass VARCHAR(255) DEFAULT '',
+        from_email VARCHAR(255) DEFAULT '',
+        is_secure BOOLEAN NOT NULL DEFAULT FALSE
+      );
+    `);
+
+    // Ensure at least one row exists for SMTP settings
+    const smtpSettingsCount = await query(`SELECT COUNT(*) FROM smtp_settings;`);
+    if (parseInt(smtpSettingsCount.rows[0].count) === 0) {
+      await query(`INSERT INTO smtp_settings (host, port, smtp_user, smtp_pass, from_email, is_secure) VALUES ('', 587, '', '', '', FALSE);`);
+    }
+
+    // Create email_templates table
+    await query(`
+      CREATE TABLE IF NOT EXISTS email_templates (
+        event_key VARCHAR(100) PRIMARY KEY REFERENCES email_notification_settings(event_key) ON DELETE CASCADE,
+        subject VARCHAR(255) NOT NULL,
+        body_html TEXT NOT NULL
+      );
+    `);
+
+    // Seed default email templates
+    const templatesCount = await query(`SELECT COUNT(*) FROM email_templates;`);
+    if (parseInt(templatesCount.rows[0].count) === 0) {
+      await query(`
+        INSERT INTO email_templates (event_key, subject, body_html)
+        VALUES 
+          ('request_created', 'Nueva solicitud registrada - {{app_name}}', '<p>Hola {{employee_name}},</p><p>Tu solicitud (ID: {{request_id}}) ha sido creada y está pendiente de aprobación.</p>'),
+          ('request_resolved', 'Resolución de tu solicitud (ID: {{request_id}}) - {{app_name}}', '<p>Hola {{employee_name}},</p><p>Tu solicitud ha sido <strong>{{status_es}}</strong>.</p><p>Observaciones: {{observation}}</p>'),
+          ('epi_requested', 'Nueva solicitud de EPI', '<p>El empleado {{employee_name}} ha solicitado un EPI ({{epi_type}}).</p>'),
+          ('epi_delivered', 'EPI Entregado - {{app_name}}', '<p>Hola {{employee_name}},</p><p>Tu EPI ha sido marcado como entregado.</p>'),
+          ('announcement_created', 'Nuevo Comunicado: {{title}}', '<p>Se ha publicado un nuevo comunicado en el muro:</p><blockquote>{{content}}</blockquote>')
+        ON CONFLICT (event_key) DO NOTHING;
+      `);
+    }
+
+
+    // Clean up shift_changed from existing DB
+    await query(`DELETE FROM email_notification_settings WHERE event_key = 'shift_changed';`);
+    await query(`DELETE FROM email_templates WHERE event_key = 'shift_changed';`);
+
+    // Create in_app_notifications table
+    await query(`
+      CREATE TABLE IF NOT EXISTS in_app_notifications (
+        id SERIAL PRIMARY KEY,
+        user_id INT NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+        title VARCHAR(255) NOT NULL,
+        message TEXT NOT NULL,
+        is_read BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
 
     // Create epi_types table
     await query(`
@@ -290,6 +350,10 @@ export async function GET() {
 
     // Add team_id to employees
     await query(`ALTER TABLE employees ADD COLUMN IF NOT EXISTS team_id INT REFERENCES teams(id) ON DELETE SET NULL;`);
+    await query(`ALTER TABLE departments ADD COLUMN IF NOT EXISTS show_in_planning BOOLEAN NOT NULL DEFAULT TRUE;`);
+
+    // Clean up any orphaned external workers (whose teams were deleted)
+    await query(`DELETE FROM employees WHERE role = 'external_worker' AND team_id IS NULL;`);
 
     // Add constraint for status check
     await query(`ALTER TABLE requests DROP CONSTRAINT IF EXISTS requests_status_check;`);

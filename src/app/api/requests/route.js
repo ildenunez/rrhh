@@ -1,6 +1,7 @@
 import { query } from '@/lib/db';
 import { logAudit } from '@/lib/audit';
 import { NextResponse } from 'next/server';
+import { sendNotificationEmail } from '@/lib/email';
 
 // helper: calculate days difference inclusive
 function getDaysDiff(startStr, endStr) {
@@ -379,7 +380,7 @@ async function createApprovedTransactionLogs(req, resolverId) {
   }
 }
 
-// Helper: Simulate email notification check and log it
+// Helper: Dispatch email using lib/email.js
 async function checkAndSimulateEmail(eventKey, requestDetails) {
   try {
     // 1. Check if the request is an absence of type 'baja'
@@ -388,34 +389,29 @@ async function checkAndSimulateEmail(eventKey, requestDetails) {
       if (absTypeRes.rows.length > 0) {
         const name = absTypeRes.rows[0].name.toLowerCase();
         if (name.includes('baja')) {
-          console.log(`[Email Sim] Solicitud de BAJA detectada (ID: ${requestDetails.id}). Correo omitido para todos los roles.`);
+          console.log(`[Email] Solicitud de BAJA detectada (ID: ${requestDetails.id}). Correo omitido para todos los roles.`);
           return;
         }
       }
     }
 
-    // 2. Fetch email settings
-    const settingsRes = await query(`SELECT * FROM email_notification_settings WHERE event_key = $1`, [eventKey]);
-    if (settingsRes.rows.length === 0) return;
-
-    const setting = settingsRes.rows[0];
-    
-    // Fetch employee details
-    const empRes = await query(`SELECT name, email, role FROM employees WHERE id = $1`, [requestDetails.employee_id]);
+    // 2. Fetch employee details
+    const empRes = await query(`SELECT * FROM employees WHERE id = $1`, [requestDetails.employee_id]);
     if (empRes.rows.length === 0) return;
     const employee = empRes.rows[0];
 
-    console.log(`\n--- [Simulación de Envío de Email para evento: ${setting.event_name}] ---`);
-    if (setting.notify_employee) {
-      console.log(`Para Empleado (${employee.name} - ${employee.email}): "Hola ${employee.name}, se ha notificado la novedad de tu solicitud."`);
-    }
-    if (setting.notify_coordinator) {
-      console.log(`Para Coordinadores: "Novedad en la solicitud del empleado ${employee.name}."`);
-    }
-    if (setting.notify_admin) {
-      console.log(`Para Administradores: "Novedad en la solicitud del empleado ${employee.name}."`);
-    }
-    console.log(`--------------------------------------------------------------------\n`);
+    // 3. Dispatch
+    let status_es = 'registrada';
+    if (requestDetails.status === 'approved') status_es = 'aprobada';
+    if (requestDetails.status === 'rejected') status_es = 'rechazada';
+
+    const eventData = {
+      request_id: requestDetails.id,
+      status_es: status_es,
+      observation: requestDetails.observation || 'Sin observaciones'
+    };
+
+    await sendNotificationEmail(eventKey, employee, eventData);
 
   } catch (err) {
     console.error("Error in checkAndSimulateEmail:", err);

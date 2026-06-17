@@ -5,20 +5,22 @@ import { NextResponse } from 'next/server';
 // Create Department
 export async function POST(request) {
   try {
-    const { name, coordinator_id, actor_id } = await request.json();
+    const { name, coordinator_id, show_in_planning, actor_id } = await request.json();
     
     if (!name) {
       return NextResponse.json({ error: "Nombre del departamento es requerido" }, { status: 400 });
     }
 
+    const showPlanning = show_in_planning !== false;
+
     const result = await query(`
-      INSERT INTO departments (name, coordinator_id)
-      VALUES ($1, $2)
+      INSERT INTO departments (name, coordinator_id, show_in_planning)
+      VALUES ($1, $2, $3)
       RETURNING *
-    `, [name, coordinator_id || null]);
+    `, [name, coordinator_id || null, showPlanning]);
 
     const department = result.rows[0];
-    await logAudit(actor_id, 'CREATE', 'department', department.id, `Creado departamento: ${department.name}. Coordinador ID: ${department.coordinator_id || 'Ninguno'}`);
+    await logAudit(actor_id, 'CREATE', 'department', department.id, `Creado departamento: ${department.name}. Coordinador ID: ${department.coordinator_id || 'Ninguno'}, Planificación: ${department.show_in_planning}`);
 
     return NextResponse.json({ success: true, department });
   } catch (error) {
@@ -30,25 +32,27 @@ export async function POST(request) {
 // Update Department
 export async function PUT(request) {
   try {
-    const { id, name, coordinator_id, actor_id } = await request.json();
+    const { id, name, coordinator_id, show_in_planning, actor_id } = await request.json();
 
     if (!id || !name) {
       return NextResponse.json({ error: "ID y nombre del departamento son requeridos" }, { status: 400 });
     }
 
+    const showPlanning = show_in_planning !== false;
+
     const result = await query(`
       UPDATE departments
-      SET name = $1, coordinator_id = $2
-      WHERE id = $3
+      SET name = $1, coordinator_id = $2, show_in_planning = $3
+      WHERE id = $4
       RETURNING *
-    `, [name, coordinator_id || null, id]);
+    `, [name, coordinator_id || null, showPlanning, id]);
 
     if (result.rows.length === 0) {
       return NextResponse.json({ error: "Departamento no encontrado" }, { status: 404 });
     }
 
     const department = result.rows[0];
-    await logAudit(actor_id, 'UPDATE', 'department', department.id, `Modificado departamento: ${department.name}. Coordinador ID: ${department.coordinator_id || 'Ninguno'}`);
+    await logAudit(actor_id, 'UPDATE', 'department', department.id, `Modificado departamento: ${department.name}. Coordinador ID: ${department.coordinator_id || 'Ninguno'}, Planificación: ${department.show_in_planning}`);
 
     return NextResponse.json({ success: true, department });
   } catch (error) {

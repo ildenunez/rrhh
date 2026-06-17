@@ -100,6 +100,9 @@ export async function DELETE(request) {
       return NextResponse.json({ error: 'ID del equipo es obligatorio' }, { status: 400 });
     }
 
+    // First, delete external workers associated with this team
+    await query(`DELETE FROM employees WHERE team_id = $1 AND role = 'external_worker'`, [parseInt(id)]);
+
     const result = await query(`DELETE FROM teams WHERE id = $1 RETURNING *`, [parseInt(id)]);
 
     if (result.rows.length === 0) {

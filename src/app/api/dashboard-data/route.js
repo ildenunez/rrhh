@@ -177,7 +177,7 @@ export async function GET(request) {
       if (managedDepartments.length > 0) {
         const deptIds = managedDepartments.map(d => d.id);
         const managedEmpsResult = await query(`
-          SELECT e.id, e.name, e.email, e.role, e.vacation_days, e.extra_hours, d.name AS department_name, d.id AS department_id, e.team_id, t.name AS team_name, e.birth_date, e.avatar_url
+          SELECT e.id, e.name, e.email, e.role, e.vacation_days, e.extra_hours, d.name AS department_name, d.id AS department_id, d.show_in_planning AS department_show_in_planning, e.team_id, t.name AS team_name, e.birth_date, e.avatar_url
           FROM employees e
           JOIN departments d ON e.department_id = d.id
           LEFT JOIN teams t ON e.team_id = t.id
@@ -235,7 +235,7 @@ export async function GET(request) {
       };
 
       const allDeptsResult = await query(`
-        SELECT d.id, d.name, d.coordinator_id, e.name AS coordinator_name,
+        SELECT d.id, d.name, d.coordinator_id, d.show_in_planning, e.name AS coordinator_name,
                (SELECT COUNT(*) FROM employees WHERE department_id = d.id) as employee_count
         FROM departments d
         LEFT JOIN employees e ON d.coordinator_id = e.id
@@ -283,7 +283,7 @@ export async function GET(request) {
       `);
 
       const allEmployeesResult = await query(`
-        SELECT e.id, e.name, e.role, e.department_id, e.team_id, e.vacation_days, e.extra_hours, d.name AS department_name, t.name AS team_name, e.birth_date, e.avatar_url, e.email
+        SELECT e.id, e.name, e.role, e.department_id, e.team_id, e.vacation_days, e.extra_hours, d.name AS department_name, d.show_in_planning AS department_show_in_planning, t.name AS team_name, e.birth_date, e.avatar_url, e.email
         FROM employees e
         LEFT JOIN departments d ON e.department_id = d.id
         LEFT JOIN teams t ON e.team_id = t.id
@@ -296,7 +296,7 @@ export async function GET(request) {
       }
 
       const allDeptsResult = await query(`
-        SELECT d.id, d.name, d.coordinator_id, e.name AS coordinator_name,
+        SELECT d.id, d.name, d.coordinator_id, d.show_in_planning, e.name AS coordinator_name,
                (SELECT COUNT(*) FROM employees WHERE department_id = d.id) as employee_count
         FROM departments d
         LEFT JOIN employees e ON d.coordinator_id = e.id

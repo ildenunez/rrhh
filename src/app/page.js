@@ -30,6 +30,8 @@ export default function Dashboard() {
   const [pendingAdjustment, setPendingAdjustment] = useState(null);
   const [adjustmentObservation, setAdjustmentObservation] = useState('');
   const [historyYearFilter, setHistoryYearFilter] = useState('all');
+  const [dashboardRequestsYearFilter, setDashboardRequestsYearFilter] = useState('all');
+  const [dashboardRequestsStatusFilter, setDashboardRequestsStatusFilter] = useState('all');
 
 
 
@@ -118,7 +120,8 @@ export default function Dashboard() {
 
   const [deptForm, setDeptForm] = useState({
     name: '',
-    coordinator_id: ''
+    coordinator_id: '',
+    show_in_planning: true
   });
 
   const [timeForm, setTimeForm] = useState({
@@ -232,6 +235,24 @@ export default function Dashboard() {
   const [epiRequestForm, setEpiRequestForm] = useState({ type_id: '', size_id: '', target_employee_id: '', target_dept_id: '' });
   const [epiTab, setEpiTab] = useState('my_requests'); // 'my_requests' | 'team_requests'
 
+  // Notifications Settings Tabs State
+  const [notificationsSubTab, setNotificationsSubTab] = useState('rules'); // 'rules' | 'smtp' | 'templates'
+  
+  // SMTP State
+  const [smtpForm, setSmtpForm] = useState({ host: '', port: 587, smtp_user: '', smtp_pass: '', from_email: '', is_secure: false });
+  const [smtpLoading, setSmtpLoading] = useState(false);
+
+  // Email Templates State
+  const [emailTemplates, setEmailTemplates] = useState([]);
+  
+  // App Notifications State
+  const [appNotifications, setAppNotifications] = useState([]);
+  const [showNotificationsMenu, setShowNotificationsMenu] = useState(false);
+  const [selectedTemplateKey, setSelectedTemplateKey] = useState('');
+  const [templateForm, setTemplateForm] = useState({ subject: '', body_html: '' });
+  const [templateLoading, setTemplateLoading] = useState(false);
+
+
   const toggleTheme = () => {
     setIsLightTheme(!isLightTheme);
     if (!isLightTheme) {
@@ -309,6 +330,7 @@ export default function Dashboard() {
   const dragRowRef = useRef(null);
   const dragOverRowRef = useRef(null);
   const [settingsTab, setSettingsTab] = useState('employees'); // 'employees' | 'departments' | 'absence_types' | 'shifts'
+  const [employeeProfileTab, setEmployeeProfileTab] = useState('transactions'); // 'transactions' | 'requests'
   // Reset all filters when active tab or settings tab changes
   useEffect(() => {
     setEmployeeSearch('');
@@ -523,6 +545,52 @@ export default function Dashboard() {
     }
   };
 
+  const fetchAppNotifications = async () => {
+    if (!loggedInUser) return;
+    try {
+      const res = await fetch(`/api/notifications?userId=${loggedInUser.id}`);
+      if (res.ok) {
+        const data = await res.json();
+        setAppNotifications(data);
+      }
+    } catch (err) {
+      console.error("Error loading app notifications:", err);
+    }
+  };
+
+  useEffect(() => {
+    if (loggedInUser) {
+      fetchAppNotifications();
+      const interval = setInterval(fetchAppNotifications, 60000);
+      return () => clearInterval(interval);
+    }
+  }, [loggedInUser]);
+
+  const markNotificationAsRead = async (id) => {
+    try {
+      await fetch('/api/notifications', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id })
+      });
+      setAppNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n));
+    } catch (err) {}
+  };
+
+  const markAllNotificationsAsRead = async () => {
+    if (!loggedInUser) return;
+    try {
+      await fetch('/api/notifications', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: loggedInUser.id, markAllAsRead: true })
+      });
+      setAppNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
+      setShowNotificationsMenu(false);
+    } catch (err) {}
+  };
+
+
   const handleEmailSettingChange = (eventKey, roleKey, value) => {
     setEmailSettings(prev => prev.map(s => {
       if (s.event_key === eventKey) {
@@ -532,23 +600,60 @@ export default function Dashboard() {
     }));
   };
 
-  const saveEmailSettings = async (e) => {
-    e.preventDefault();
+  const saveEmailSettings = async () => {
     try {
       const res = await fetch('/api/email-settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(emailSettings)
+        body: JSON.stringify(emailSettingsForm)
       });
-      const data = await res.json();
-      if (data.success) {
-        alert("Configuración de notificaciones guardada con éxito.");
-      } else {
-        alert(data.error || "Error al guardar la configuración.");
-      }
+      if (!res.ok) throw new Error("Error guardando preferencias de email");
+      alert("Ajustes de notificaciones guardados correctamente");
     } catch (err) {
       alert(err.message);
     }
+  };
+
+  const saveSmtpSettings = async (e) => {
+    e.preventDefault();
+    setSmtpLoading(true);
+    try {
+      const res = await fetch('/api/smtp-settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(smtpForm)
+      });
+      if (!res.ok) throw new Error("Error guardando ajustes SMTP");
+      alert("Servidor SMTP configurado correctamente.");
+    } catch (err) {
+      alert(err.message);
+    }
+    setSmtpLoading(false);
+  };
+
+  const saveEmailTemplate = async (e) => {
+    e.preventDefault();
+    if (!selectedTemplateKey) return;
+    setTemplateLoading(true);
+    try {
+      const res = await fetch('/api/email-templates', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ event_key: selectedTemplateKey, ...templateForm })
+      });
+      if (!res.ok) throw new Error("Error guardando plantilla");
+      alert("Plantilla actualizada correctamente.");
+      
+      // Update local state
+      setEmailTemplates(prev => prev.map(t => 
+        t.event_key === selectedTemplateKey 
+          ? { ...t, subject: templateForm.subject, body_html: templateForm.body_html }
+          : t
+      ));
+    } catch (err) {
+      alert(err.message);
+    }
+    setTemplateLoading(false);
   };
 
   // Fetch full data whenever selected user changes
@@ -561,6 +666,22 @@ export default function Dashboard() {
         const res = await fetch(`/api/dashboard-data?userId=${selectedUserId}`);
         if (!res.ok) throw new Error("Error cargando datos del dashboard.");
         const data = await res.json();
+        
+        const templatesRes = await fetch('/api/email-templates');
+        const templatesData = await templatesRes.json();
+        setEmailTemplates(templatesData);
+        
+        const smtpRes = await fetch('/api/smtp-settings');
+        const smtpData = await smtpRes.json();
+        setSmtpForm({
+          host: smtpData.host || '',
+          port: smtpData.port || 587,
+          smtp_user: smtpData.smtp_user || '',
+          smtp_pass: smtpData.smtp_pass || '',
+          from_email: smtpData.from_email || '',
+          is_secure: !!smtpData.is_secure
+        });
+        
         setDashboardData(data);
         
         // Load time records
@@ -1715,6 +1836,7 @@ export default function Dashboard() {
   // Employee CRUD operations
   const openAddEmployee = () => {
     setEditingEmployee(null);
+    setEmployeeProfileTab('transactions');
     setEmpForm({
       name: '',
       email: '',
@@ -1732,6 +1854,7 @@ export default function Dashboard() {
 
   const openEditEmployee = (emp) => {
     setEditingEmployee(emp);
+    setEmployeeProfileTab('transactions');
     setEmpForm({
       name: emp.name,
       email: emp.email,
@@ -1818,7 +1941,8 @@ export default function Dashboard() {
     setEditingDepartment(null);
     setDeptForm({
       name: '',
-      coordinator_id: ''
+      coordinator_id: '',
+      show_in_planning: true
     });
     setShowDepartmentModal(true);
   };
@@ -1827,7 +1951,8 @@ export default function Dashboard() {
     setEditingDepartment(dept);
     setDeptForm({
       name: dept.name,
-      coordinator_id: dept.coordinator_id || ''
+      coordinator_id: dept.coordinator_id || '',
+      show_in_planning: dept.show_in_planning !== false
     });
     setShowDepartmentModal(true);
   };
@@ -2567,12 +2692,125 @@ export default function Dashboard() {
           </div>
 
           {/* User Switcher Dropdown */}
-          {loggedInUser?.role === 'admin' && (
-            <div className="glass-panel user-selector-wrapper">
-              <span className="selector-label">Vista de Simulación:</span>
-              <select 
-                className="selector-dropdown"
-                value={selectedUserId} 
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+            
+            {/* Notification Bell */}
+            {loggedInUser && (
+              <div style={{ position: 'relative' }}>
+                <button 
+                  onClick={() => setShowNotificationsMenu(!showNotificationsMenu)}
+                  style={{
+                    background: 'rgba(255, 255, 255, 0.05)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: '50%',
+                    width: '40px',
+                    height: '40px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    cursor: 'pointer',
+                    position: 'relative',
+                    transition: 'all 0.2s',
+                    color: 'var(--text-primary)'
+                  }}
+                >
+                  🔔
+                  {appNotifications.filter(n => !n.is_read).length > 0 && (
+                    <span style={{
+                      position: 'absolute',
+                      top: '-2px',
+                      right: '-2px',
+                      background: 'var(--danger)',
+                      color: 'white',
+                      fontSize: '0.65rem',
+                      fontWeight: 'bold',
+                      minWidth: '18px',
+                      height: '18px',
+                      borderRadius: '9px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      padding: '0 4px',
+                      boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
+                    }}>
+                      {appNotifications.filter(n => !n.is_read).length}
+                    </span>
+                  )}
+                </button>
+
+                {/* Notifications Dropdown */}
+                {showNotificationsMenu && (
+                  <div style={{
+                    position: 'absolute',
+                    top: '110%',
+                    right: 0,
+                    width: '320px',
+                    maxHeight: '400px',
+                    background: 'var(--bg-modal)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: '12px',
+                    boxShadow: '0 10px 25px rgba(0,0,0,0.5)',
+                    zIndex: 100,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    overflow: 'hidden'
+                  }}>
+                    <div style={{ padding: '1rem', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0,0,0,0.2)' }}>
+                      <h4 style={{ margin: 0, fontSize: '1rem', fontWeight: 'bold' }}>Notificaciones</h4>
+                      {appNotifications.filter(n => !n.is_read).length > 0 && (
+                        <button onClick={markAllNotificationsAsRead} style={{ background: 'none', border: 'none', color: 'var(--primary)', fontSize: '0.75rem', cursor: 'pointer', fontWeight: 'bold' }}>
+                          Marcar todo como leído
+                        </button>
+                      )}
+                    </div>
+                    <div style={{ overflowY: 'auto', flex: 1, maxHeight: '350px' }}>
+                      {appNotifications.length === 0 ? (
+                        <div style={{ padding: '2rem 1rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                          No tienes notificaciones
+                        </div>
+                      ) : (
+                        appNotifications.map(notif => (
+                          <div 
+                            key={notif.id} 
+                            onClick={() => !notif.is_read && markNotificationAsRead(notif.id)}
+                            style={{ 
+                              padding: '1rem', 
+                              borderBottom: '1px solid var(--border-color)', 
+                              background: notif.is_read ? 'transparent' : 'rgba(var(--primary-rgb), 0.05)',
+                              cursor: notif.is_read ? 'default' : 'pointer',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: '0.25rem',
+                              transition: 'background 0.2s'
+                            }}
+                            onMouseEnter={e => !notif.is_read && (e.currentTarget.style.background = 'rgba(var(--primary-rgb), 0.1)')}
+                            onMouseLeave={e => !notif.is_read && (e.currentTarget.style.background = 'rgba(var(--primary-rgb), 0.05)')}
+                          >
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                              <strong style={{ fontSize: '0.85rem', color: notif.is_read ? 'var(--text-secondary)' : 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                {!notif.is_read && <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--primary)', display: 'inline-block' }}></span>}
+                                {notif.title}
+                              </strong>
+                            </div>
+                            <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-muted)' }}>{notif.message}</p>
+                            <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+                              {new Date(notif.created_at).toLocaleString()}
+                            </span>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {loggedInUser?.role === 'admin' && (
+              <div className="glass-panel user-selector-wrapper">
+                <span className="selector-label">Vista de Simulación:</span>
+                <select 
+                  className="selector-dropdown"
+                  value={selectedUserId} 
                 onChange={handleUserChange}
               >
                 {[...usersList].sort((a, b) => a.name.localeCompare(b.name)).map(u => (
@@ -2582,7 +2820,8 @@ export default function Dashboard() {
                 ))}
               </select>
             </div>
-          )}
+            )}
+          </div>
         </div>
 
         {error && (
@@ -3152,11 +3391,11 @@ export default function Dashboard() {
                         const dateObj = new Date(schedYear, schedMonth, dayNum);
                         const isWeekend = dateObj.getDay() === 0 || dateObj.getDay() === 6;
 
-                        // Check if day falls within any approved absence or hours_free
+                        // Check if day falls within any approved or pending absence or hours_free
                         const cellDate = new Date(schedYear, schedMonth, dayNum);
                         cellDate.setHours(0,0,0,0);
-                        const approvedAbs = (dashboardData.resolvedRequests || []).find(r => {
-                          if ((r.type !== 'absence' && r.type !== 'hours_free') || r.status !== 'approved') return false;
+                        const overlayReq = [...(dashboardData.pendingRequests || []), ...(dashboardData.resolvedRequests || [])].find(r => {
+                          if ((r.type !== 'absence' && r.type !== 'hours_free') || (r.status !== 'approved' && r.status !== 'pending')) return false;
                           if (!r.start_date) return false;
                           const start = new Date(r.start_date);
                           start.setHours(0,0,0,0);
@@ -3171,17 +3410,17 @@ export default function Dashboard() {
                           <div 
                             key={dayNum} 
                             className="calendar-day-cell"
-                            title={isNationalHoliday ? `Festivo Nacional: ${isNationalHoliday.name}` : (approvedAbs ? (approvedAbs.type === 'hours_free' ? 'Horas Libres' : `Ausencia Aprobada: ${approvedAbs.absence_type_name || 'Vacaciones'}`) : (assigned ? `${assigned.name}: ${assigned.start_time ? `${assigned.start_time.slice(0, 5)} - ${assigned.end_time?.slice(0, 5)}` : 'Sin horario'}${assigned.start_time_2 ? ` / ${assigned.start_time_2.slice(0, 5)} - ${assigned.end_time_2.slice(0, 5)}` : ''}` : 'Libre'))}
+                            title={isNationalHoliday ? `Festivo Nacional: ${isNationalHoliday.name}` : (overlayReq ? (overlayReq.type === 'hours_free' ? `Horas Libres (${overlayReq.status === 'pending' ? 'Pendiente' : 'Aprobada'})` : `Ausencia: ${overlayReq.absence_type_name || 'Vacaciones'} (${overlayReq.status === 'pending' ? 'Pendiente' : 'Aprobada'})`) : (assigned ? `${assigned.name}: ${assigned.start_time ? `${assigned.start_time.slice(0, 5)} - ${assigned.end_time?.slice(0, 5)}` : 'Sin horario'}${assigned.start_time_2 ? ` / ${assigned.start_time_2.slice(0, 5)} - ${assigned.end_time_2.slice(0, 5)}` : ''}` : 'Libre'))}
                             style={{ 
                               background: isNationalHoliday
                                 ? 'linear-gradient(135deg, rgba(239, 68, 68, 0.45), rgba(185, 28, 28, 0.25))'
-                                : (approvedAbs 
-                                  ? 'linear-gradient(135deg, rgba(16, 185, 129, 0.22), rgba(16, 185, 129, 0.1))' 
+                                : (overlayReq 
+                                  ? (overlayReq.status === 'pending' ? 'linear-gradient(135deg, rgba(251, 191, 36, 0.22), rgba(251, 191, 36, 0.1))' : 'linear-gradient(135deg, rgba(16, 185, 129, 0.22), rgba(16, 185, 129, 0.1))') 
                                   : (assigned ? assigned.color : (isWeekend ? 'rgba(255,255,255,0.02)' : 'rgba(255,255,255,0.03)'))),
                               border: isNationalHoliday
                                 ? '2px solid #ef4444'
-                                : (approvedAbs 
-                                  ? '2px solid var(--success)' 
+                                : (overlayReq 
+                                  ? (overlayReq.status === 'pending' ? '2px solid #fbbf24' : '2px solid var(--success)') 
                                   : (assigned ? `1px solid ${assigned.color}` : '1px solid var(--border-color)')) ,
                               borderRadius: '8px',
                               minHeight: '60px',
@@ -3192,8 +3431,8 @@ export default function Dashboard() {
                               alignItems: 'center',
                               boxShadow: isNationalHoliday
                                 ? '0 0 10px rgba(239, 68, 68, 0.3)'
-                                : (approvedAbs 
-                                  ? '0 0 10px rgba(16, 185, 129, 0.2)' 
+                                : (overlayReq 
+                                  ? (overlayReq.status === 'pending' ? '0 0 10px rgba(251, 191, 36, 0.2)' : '0 0 10px rgba(16, 185, 129, 0.2)') 
                                   : (assigned ? 'inset 0 0 12px rgba(0,0,0,0.25), 0 2px 4px rgba(0,0,0,0.1)' : 'none')),
                               transition: 'all 0.2s ease',
                               position: 'relative'
@@ -3202,8 +3441,8 @@ export default function Dashboard() {
                             <span style={{ 
                               fontWeight: 'bold', 
                               fontSize: '1.1rem',
-                              color: isNationalHoliday ? '#fca5a5' : (approvedAbs ? 'var(--success)' : (assigned ? '#ffffff' : (isWeekend ? 'var(--warning)' : 'var(--text-primary)'))),
-                              textShadow: (assigned || isNationalHoliday) && !approvedAbs ? '0 1px 3px rgba(0,0,0,0.6)' : 'none'
+                              color: isNationalHoliday ? '#fca5a5' : (overlayReq ? (overlayReq.status === 'pending' ? '#fbbf24' : 'var(--success)') : (assigned ? '#ffffff' : (isWeekend ? 'var(--warning)' : 'var(--text-primary)'))),
+                              textShadow: (assigned || isNationalHoliday) && !overlayReq ? '0 1px 3px rgba(0,0,0,0.6)' : 'none'
                             }}>
                               {dayNum}
                             </span>
@@ -3227,11 +3466,11 @@ export default function Dashboard() {
                                 {isNationalHoliday.name}
                               </span>
                             )}
-                            {approvedAbs && (
+                            {overlayReq && (
                               <span style={{ 
                                 fontSize: '0.62rem', 
-                                backgroundColor: 'var(--success)', 
-                                color: '#fff', 
+                                backgroundColor: overlayReq.status === 'pending' ? '#fbbf24' : 'var(--success)', 
+                                color: overlayReq.status === 'pending' ? '#000' : '#fff', 
                                 padding: '0.1rem 0.35rem', 
                                 borderRadius: '4px',
                                 fontWeight: 'bold',
@@ -3243,8 +3482,9 @@ export default function Dashboard() {
                                 textAlign: 'center',
                                 display: 'block',
                                 border: '1px solid rgba(255,255,255,0.2)'
-                              }} title={approvedAbs.type === 'hours_free' ? 'Horas Libres' : (approvedAbs.absence_type_name || 'Ausencia')}>
-                                {approvedAbs.type === 'hours_free' ? 'Horas Libres' : (approvedAbs.absence_type_name || 'Ausencia')}
+                              }} title={overlayReq.type === 'hours_free' ? `Horas Libres (${overlayReq.status === 'pending' ? 'Pendiente' : 'Aprobada'})` : `${overlayReq.absence_type_name || 'Ausencia'} (${overlayReq.status === 'pending' ? 'Pendiente' : 'Aprobada'})`}>
+                                {overlayReq.type === 'hours_free' ? 'Horas Libres' : (overlayReq.absence_type_name || 'Ausencia')}
+                                {overlayReq.status === 'pending' ? ' (pte)' : ''}
                               </span>
                             )}
                           </div>
@@ -3355,8 +3595,34 @@ export default function Dashboard() {
                     )}
 
                     <div className="glass-panel" style={{ minWidth: 0 }}>
-                      <div className="panel-header">
+                      <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
                         <h2 className="panel-title">📋 Estado de Mis Solicitudes</h2>
+                        {((dashboardData?.pendingRequests?.length > 0) || (dashboardData?.resolvedRequests?.length > 0)) && (
+                          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+                            <select
+                              className="selector-dropdown"
+                              style={{ padding: '0.35rem 0.5rem', fontSize: '0.8rem', borderRadius: '8px' }}
+                              value={dashboardRequestsYearFilter}
+                              onChange={e => setDashboardRequestsYearFilter(e.target.value)}
+                            >
+                              <option value="all">📅 Todos los Años</option>
+                              {Array.from(new Set([...(dashboardData.pendingRequests || []), ...(dashboardData.resolvedRequests || [])].map(r => new Date(r.created_at).getFullYear()))).sort((a,b)=>b-a).map(y => (
+                                <option key={y} value={y}>{y}</option>
+                              ))}
+                            </select>
+                            <select
+                              className="selector-dropdown"
+                              style={{ padding: '0.35rem 0.5rem', fontSize: '0.8rem', borderRadius: '8px' }}
+                              value={dashboardRequestsStatusFilter}
+                              onChange={e => setDashboardRequestsStatusFilter(e.target.value)}
+                            >
+                              <option value="all">🏷️ Todos los Estados</option>
+                              <option value="pending">⏳ Pendiente</option>
+                              <option value="approved">✅ Aprobada</option>
+                              <option value="rejected">❌ Rechazada</option>
+                            </select>
+                          </div>
+                        )}
                       </div>
                       <div className="panel-body custom-table-wrapper" style={{ overflowX: 'auto' }}>
                         {((dashboardData.pendingRequests || []).length === 0 && (dashboardData.resolvedRequests || []).length === 0) ? (
@@ -3377,39 +3643,37 @@ export default function Dashboard() {
                               </tr>
                             </thead>
                             <tbody>
-                              {(dashboardData.pendingRequests || []).map(req => (
-                                <tr 
-                                  key={req.id}
-                                  onClick={() => handleOpenRequestDetail(req)}
-                                  style={{ cursor: 'pointer' }}
-                                  title="Haga clic para ver detalles"
-                                >
-                                  <td style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>{new Date(req.created_at).toLocaleDateString('es-ES')}</td>
-                                  <td style={{ fontWeight: '500' }}>{getRequestTypeLabel(req)}</td>
-                                  <td>{req.amount > 0 ? `+${req.amount}` : req.amount} {req.type === 'absence' ? 'd' : 'h'}</td>
-                                  <td style={{ fontSize: '0.85rem' }}>
-                                    {req.type === 'absence' ? `${new Date(req.start_date).toLocaleDateString('es-ES')} a ${new Date(req.end_date).toLocaleDateString('es-ES')}` : req.type === 'hours_free' && req.start_date ? `Día: ${new Date(req.start_date).toLocaleDateString('es-ES')}` : req.original_record_id ? `Cred. #${req.original_record_id}` : '-'}
-                                  </td>
-                                  <td style={{ fontStyle: 'italic' }}>{req.observation}</td>
-                                  <td>{getRequestStatusBadge(req.status)}</td>
-                                  <td style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Esperando aprobación...</td>
-                                </tr>
-                              ))}
-                              {(dashboardData.resolvedRequests || []).map(req => (
-                                <tr key={req.id}>
-                                  <td style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>{new Date(req.created_at).toLocaleDateString('es-ES')}</td>
-                                  <td style={{ fontWeight: '500' }}>{getRequestTypeLabel(req)}</td>
-                                  <td>{req.amount > 0 ? `+${req.amount}` : req.amount} {req.type === 'absence' ? 'd' : 'h'}</td>
-                                  <td style={{ fontSize: '0.85rem' }}>
-                                    {req.type === 'absence' ? `${new Date(req.start_date).toLocaleDateString('es-ES')} a ${new Date(req.end_date).toLocaleDateString('es-ES')}` : req.type === 'hours_free' && req.start_date ? `Día: ${new Date(req.start_date).toLocaleDateString('es-ES')}` : req.original_record_id ? `Cred. #${req.original_record_id}` : '-'}
-                                  </td>
-                                  <td style={{ fontStyle: 'italic' }}>{req.observation}</td>
-                                  <td>{getRequestStatusBadge(req.status)}</td>
-                                  <td style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                                    Por {req.resolver_name || 'Sistema'}
-                                  </td>
-                                </tr>
-                              ))}
+                              {[...(dashboardData.pendingRequests || []), ...(dashboardData.resolvedRequests || [])]
+                                .filter(req => {
+                                  if (dashboardRequestsYearFilter !== 'all' && new Date(req.created_at).getFullYear().toString() !== dashboardRequestsYearFilter) return false;
+                                  if (dashboardRequestsStatusFilter !== 'all' && req.status !== dashboardRequestsStatusFilter) return false;
+                                  return true;
+                                })
+                                .sort((a, b) => {
+                                  const dateA = a.resolved_at ? new Date(a.resolved_at) : new Date(a.created_at);
+                                  const dateB = b.resolved_at ? new Date(b.resolved_at) : new Date(b.created_at);
+                                  return dateB - dateA;
+                                })
+                                .map(req => (
+                                  <tr 
+                                    key={req.id}
+                                    onClick={req.status === 'pending' ? () => handleOpenRequestDetail(req) : undefined}
+                                    style={{ cursor: req.status === 'pending' ? 'pointer' : 'default' }}
+                                    title={req.status === 'pending' ? "Haga clic para ver detalles" : ""}
+                                  >
+                                    <td style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>{new Date(req.created_at).toLocaleDateString('es-ES')}</td>
+                                    <td style={{ fontWeight: '500' }}>{getRequestTypeLabel(req)}</td>
+                                    <td>{req.amount > 0 ? `+${req.amount}` : req.amount} {req.type === 'absence' ? 'd' : 'h'}</td>
+                                    <td style={{ fontSize: '0.85rem' }}>
+                                      {req.type === 'absence' ? `${new Date(req.start_date).toLocaleDateString('es-ES')} a ${new Date(req.end_date).toLocaleDateString('es-ES')}` : req.type === 'hours_free' && req.start_date ? `Día: ${new Date(req.start_date).toLocaleDateString('es-ES')}` : req.original_record_id ? `Cred. #${req.original_record_id}` : '-'}
+                                    </td>
+                                    <td style={{ fontStyle: 'italic' }}>{req.observation}</td>
+                                    <td>{getRequestStatusBadge(req.status)}</td>
+                                    <td style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                                      {req.status === 'pending' ? 'Esperando aprobación...' : `Por ${req.resolver_name || 'Sistema'}`}
+                                    </td>
+                                  </tr>
+                                ))}
                             </tbody>
                           </table>
                         )}
@@ -3676,7 +3940,12 @@ export default function Dashboard() {
                           </thead>
                           <tbody>
                             {teamList.map(emp => (
-                              <tr key={emp.id}>
+                              <tr 
+                                key={emp.id} 
+                                onClick={() => openEditEmployee(emp)} 
+                                style={{ cursor: 'pointer' }}
+                                title="Haga clic para ver la ficha del empleado"
+                              >
                                 <td style={{ fontWeight: '500' }}>{emp.name}</td>
                                 <td style={{ color: 'var(--text-secondary)' }}>{emp.email}</td>
                                 <td>{emp.department_name || 'Sin departamento'}</td>
@@ -4076,6 +4345,7 @@ export default function Dashboard() {
                               <th>Nombre</th>
                               <th>Gestor / Coordinador</th>
                               <th>Empleados en Departamento</th>
+                              <th>Planificación</th>
                               <th style={{ textAlign: 'right' }}>Acciones</th>
                             </tr>
                           </thead>
@@ -4097,6 +4367,13 @@ export default function Dashboard() {
                                   <span style={{ padding: '0.2rem 0.5rem', background: 'rgba(255,255,255,0.05)', borderRadius: '4px', border: '1px solid var(--border-color)', fontWeight: 'bold' }}>
                                     {dept.employee_count} emp.
                                   </span>
+                                </td>
+                                <td>
+                                  {dept.show_in_planning !== false ? (
+                                    <span style={{ color: 'var(--success)', fontWeight: '600', fontSize: '0.9rem' }}>✔️ Visible</span>
+                                  ) : (
+                                    <span style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>❌ Oculto</span>
+                                  )}
                                 </td>
                                 <td style={{ textAlign: 'right' }}>
                                   <div style={{ display: 'inline-flex', gap: '0.5rem' }}>
@@ -4701,10 +4978,54 @@ export default function Dashboard() {
 
                   {/* SUB-TAB 4: NOTIFICATIONS */}
                   {settingsTab === 'notifications' && (
-                    <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap', width: '100%' }}>
-                      {/* Left Panel: Crear Comunicado */}
-                      <div className="glass-panel" style={{ flex: '1 1 450px', padding: '1.5rem', minWidth: '320px' }}>
-                        <div className="panel-header" style={{ borderBottom: 'none', paddingBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', width: '100%' }}>
+                      
+                      {/* Sub-tabs Navigation */}
+                      <div className="glass-panel" style={{ padding: '0.5rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap', border: '1px solid var(--border-color)', borderRadius: '14px' }}>
+                        <button 
+                          type="button"
+                          onClick={() => setNotificationsSubTab('rules')}
+                          style={{ 
+                            flex: 1, minWidth: '150px',
+                            background: notificationsSubTab === 'rules' ? 'var(--primary-glow)' : 'transparent',
+                            color: notificationsSubTab === 'rules' ? 'var(--primary-light)' : 'var(--text-secondary)',
+                            fontWeight: '700', borderRadius: '10px', padding: '0.6rem 1rem', border: 'none', cursor: 'pointer', transition: 'all 0.2s ease'
+                          }}
+                        >
+                          📜 Muro y Reglas
+                        </button>
+                        <button 
+                          type="button"
+                          onClick={() => setNotificationsSubTab('smtp')}
+                          style={{ 
+                            flex: 1, minWidth: '150px',
+                            background: notificationsSubTab === 'smtp' ? 'var(--primary-glow)' : 'transparent',
+                            color: notificationsSubTab === 'smtp' ? 'var(--primary-light)' : 'var(--text-secondary)',
+                            fontWeight: '700', borderRadius: '10px', padding: '0.6rem 1rem', border: 'none', cursor: 'pointer', transition: 'all 0.2s ease'
+                          }}
+                        >
+                          ⚙️ Servidor SMTP
+                        </button>
+                        <button 
+                          type="button"
+                          onClick={() => setNotificationsSubTab('templates')}
+                          style={{ 
+                            flex: 1, minWidth: '150px',
+                            background: notificationsSubTab === 'templates' ? 'var(--primary-glow)' : 'transparent',
+                            color: notificationsSubTab === 'templates' ? 'var(--primary-light)' : 'var(--text-secondary)',
+                            fontWeight: '700', borderRadius: '10px', padding: '0.6rem 1rem', border: 'none', cursor: 'pointer', transition: 'all 0.2s ease'
+                          }}
+                        >
+                          ✉️ Plantillas de Email
+                        </button>
+                      </div>
+
+                      {notificationsSubTab === 'rules' && (
+                        <div>
+                          <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap', width: '100%' }}>
+                            {/* Left Panel: Crear Comunicado */}
+                            <div className="glass-panel" style={{ flex: '1 1 450px', padding: '1.5rem', minWidth: '320px' }}>
+                              <div className="panel-header" style={{ borderBottom: 'none', paddingBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                           <span style={{ fontSize: '1.2rem' }}>📢</span>
                           <h3 className="panel-title" style={{ fontSize: '1.2rem', fontWeight: '800', margin: 0 }}>Crear Comunicado en el Muro</h3>
                         </div>
@@ -4784,6 +5105,7 @@ export default function Dashboard() {
                           )}
                       </div>
                     </div>
+                    </div>
 
                     {/* Bottom Panel: Configuración de Notificaciones por Email */}
                       <div className="glass-panel" style={{ flex: '1 1 100%', padding: '1.5rem', marginTop: '1.5rem' }}>
@@ -4850,6 +5172,124 @@ export default function Dashboard() {
                     </div>
                   )}
 
+                  {notificationsSubTab === 'smtp' && (
+                    <div className="glass-panel" style={{ padding: '1.5rem', width: '100%' }}>
+                      <div className="panel-header" style={{ borderBottom: 'none', paddingBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <span style={{ fontSize: '1.2rem' }}>⚙️</span>
+                        <h3 className="panel-title" style={{ fontSize: '1.2rem', fontWeight: '800', margin: 0 }}>Configuración de Servidor SMTP</h3>
+                      </div>
+                      <p style={{ fontSize: '0.88rem', color: 'var(--text-secondary)', marginBottom: '1.5rem' }}>
+                        Configura las credenciales de tu proveedor de correo (ej. Resend, SendGrid, Office365) para activar el envío real de notificaciones.
+                      </p>
+                      <form onSubmit={saveSmtpSettings} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', maxWidth: '600px' }}>
+                        <div className="form-group">
+                          <label className="form-label" style={{ fontSize: '0.75rem', fontWeight: 'bold', color: 'var(--text-secondary)' }}>HOST SMTP</label>
+                          <input type="text" className="form-input" placeholder="ej. smtp.resend.com" value={smtpForm.host} onChange={e => setSmtpForm({...smtpForm, host: e.target.value})} required />
+                        </div>
+                        <div className="form-group">
+                          <label className="form-label" style={{ fontSize: '0.75rem', fontWeight: 'bold', color: 'var(--text-secondary)' }}>PUERTO</label>
+                          <input type="number" className="form-input" placeholder="ej. 587 o 465" value={smtpForm.port} onChange={e => setSmtpForm({...smtpForm, port: parseInt(e.target.value)})} required />
+                        </div>
+                        <div className="form-group">
+                          <label className="form-label" style={{ fontSize: '0.75rem', fontWeight: 'bold', color: 'var(--text-secondary)' }}>USUARIO SMTP</label>
+                          <input type="text" className="form-input" placeholder="Usuario o API Key" value={smtpForm.smtp_user} onChange={e => setSmtpForm({...smtpForm, smtp_user: e.target.value})} required />
+                        </div>
+                        <div className="form-group">
+                          <label className="form-label" style={{ fontSize: '0.75rem', fontWeight: 'bold', color: 'var(--text-secondary)' }}>CONTRASEÑA SMTP</label>
+                          <input type="password" className="form-input" placeholder="Contraseña o API Key Secret" value={smtpForm.smtp_pass} onChange={e => setSmtpForm({...smtpForm, smtp_pass: e.target.value})} required />
+                        </div>
+                        <div className="form-group">
+                          <label className="form-label" style={{ fontSize: '0.75rem', fontWeight: 'bold', color: 'var(--text-secondary)' }}>EMAIL REMITENTE (FROM)</label>
+                          <input type="email" className="form-input" placeholder="ej. no-reply@tuempresa.com" value={smtpForm.from_email} onChange={e => setSmtpForm({...smtpForm, from_email: e.target.value})} required />
+                        </div>
+                        <div className="form-group" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <input type="checkbox" checked={smtpForm.is_secure} onChange={e => setSmtpForm({...smtpForm, is_secure: e.target.checked})} style={{ width: '18px', height: '18px', cursor: 'pointer' }} id="smtp-secure" />
+                          <label htmlFor="smtp-secure" style={{ fontSize: '0.88rem', color: 'var(--text-primary)', cursor: 'pointer', fontWeight: '500' }}>
+                            Usar conexión segura (TLS/SSL directo)
+                          </label>
+                        </div>
+                        <div style={{ marginTop: '0.5rem' }}>
+                          <button type="submit" className="btn btn-primary" disabled={smtpLoading} style={{ padding: '0.8rem 2rem', borderRadius: '10px', fontWeight: 'bold', opacity: smtpLoading ? 0.7 : 1 }}>
+                            {smtpLoading ? 'Guardando...' : 'Guardar Ajustes SMTP'}
+                          </button>
+                        </div>
+                      </form>
+                    </div>
+                  )}
+
+                  {notificationsSubTab === 'templates' && (
+                    <div className="glass-panel" style={{ padding: '1.5rem', width: '100%' }}>
+                      <div className="panel-header" style={{ borderBottom: 'none', paddingBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <span style={{ fontSize: '1.2rem' }}>✉️</span>
+                        <h3 className="panel-title" style={{ fontSize: '1.2rem', fontWeight: '800', margin: 0 }}>Edición de Plantillas de Email</h3>
+                      </div>
+                      <p style={{ fontSize: '0.88rem', color: 'var(--text-secondary)', marginBottom: '1.5rem' }}>
+                        Personaliza el asunto y el cuerpo HTML de los correos automáticos. Utiliza las variables en formato <code>{`{{variable}}`}</code>.
+                      </p>
+                      
+                      <div className="form-group" style={{ maxWidth: '400px', marginBottom: '2rem' }}>
+                        <label className="form-label" style={{ fontSize: '0.75rem', fontWeight: 'bold', color: 'var(--text-secondary)' }}>SELECCIONAR EVENTO</label>
+                        <select 
+                          className="form-input" 
+                          value={selectedTemplateKey}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setSelectedTemplateKey(val);
+                            if (val) {
+                              const tpl = emailTemplates.find(t => t.event_key === val);
+                              if (tpl) {
+                                setTemplateForm({ subject: tpl.subject, body_html: tpl.body_html });
+                              }
+                            } else {
+                              setTemplateForm({ subject: '', body_html: '' });
+                            }
+                          }}
+                        >
+                          <option value="">-- Elige un evento --</option>
+                          {emailTemplates.map(t => (
+                            <option key={t.event_key} value={t.event_key}>{t.event_name}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {selectedTemplateKey && (
+                        <form onSubmit={saveEmailTemplate} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', maxWidth: '800px', background: 'rgba(0,0,0,0.1)', padding: '1.5rem', borderRadius: '12px' }}>
+                          <div className="form-group">
+                            <label className="form-label" style={{ fontSize: '0.75rem', fontWeight: 'bold', color: 'var(--text-secondary)' }}>ASUNTO DEL CORREO</label>
+                            <input 
+                              type="text" 
+                              className="form-input" 
+                              value={templateForm.subject} 
+                              onChange={e => setTemplateForm({...templateForm, subject: e.target.value})} 
+                              required 
+                            />
+                          </div>
+                          <div className="form-group">
+                            <label className="form-label" style={{ fontSize: '0.75rem', fontWeight: 'bold', color: 'var(--text-secondary)' }}>CUERPO (CÓDIGO HTML)</label>
+                            <textarea 
+                              className="form-input" 
+                              style={{ minHeight: '300px', fontFamily: 'monospace', fontSize: '0.85rem' }}
+                              value={templateForm.body_html} 
+                              onChange={e => setTemplateForm({...templateForm, body_html: e.target.value})} 
+                              required 
+                            />
+                          </div>
+                          <div style={{ padding: '1rem', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                            <strong>Variables disponibles frecuentes:</strong> <code>{`{{employee_name}}`}</code>, <code>{`{{request_id}}`}</code>, <code>{`{{status_es}}`}</code>, <code>{`{{observation}}`}</code>, <code>{`{{app_name}}`}</code>.
+                          </div>
+                          <div style={{ marginTop: '0.5rem' }}>
+                            <button type="submit" className="btn btn-primary" disabled={templateLoading} style={{ padding: '0.8rem 2rem', borderRadius: '10px', fontWeight: 'bold', opacity: templateLoading ? 0.7 : 1 }}>
+                              {templateLoading ? 'Guardando...' : 'Guardar Plantilla'}
+                            </button>
+                          </div>
+                        </form>
+                      )}
+                    </div>
+                  )}
+
+                    </div>
+                  )}
+
                   {/* SUB-TAB 5: REPORTS */}
                   {settingsTab === 'reports' && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', width: '100%' }}>
@@ -4889,6 +5329,23 @@ export default function Dashboard() {
                             }}
                           >
                             📊 Estadísticas
+                          </button>
+                          <button
+                            type="button"
+                            className="btn"
+                            onClick={() => setReportsSubTab('intelligence')}
+                            style={{
+                              background: reportsSubTab === 'intelligence' ? 'var(--primary-glow)' : 'transparent',
+                              color: reportsSubTab === 'intelligence' ? 'var(--primary-light)' : 'var(--text-secondary)',
+                              fontWeight: '700',
+                              borderRadius: '8px',
+                              padding: '0.5rem 1rem',
+                              border: 'none',
+                              cursor: 'pointer',
+                              transition: 'all 0.2s ease'
+                            }}
+                          >
+                            🧠 Inteligencia / Análisis
                           </button>
                         </div>
 
@@ -5451,6 +5908,146 @@ export default function Dashboard() {
                             </div>
                           );
                         })()}
+
+                        {/* RENDER SUB-TAB: INTELLIGENCE */}
+                        {reportsSubTab === 'intelligence' && (() => {
+                          // Filter requests by approved and absence type
+                          const list = (dashboardData.allResolvedRequests || []).filter(req => {
+                            if (req.status !== 'approved') return false;
+                            if (req.type !== 'absence') return false;
+                            
+                            const reqStart = req.start_date ? req.start_date.split('T')[0] : '';
+                            const reqEnd = req.end_date ? req.end_date.split('T')[0] : reqStart;
+                            
+                            if (!reqStart) return false;
+                            return reqStart <= queryEndDate && reqEnd >= queryStartDate;
+                          });
+
+                          // Map out each day within the range for each request
+                          const dateCounts = {};
+                          const deptRisk = {};
+
+                          list.forEach(req => {
+                            const emp = (dashboardData.allEmployees || []).find(e => e.id === req.employee_id);
+                            if (!emp) return;
+                            const deptName = emp.department_name || 'Sin Dept';
+
+                            let current = new Date(req.start_date);
+                            const end = req.end_date ? new Date(req.end_date) : current;
+                            current.setHours(0,0,0,0);
+                            end.setHours(0,0,0,0);
+
+                            while (current <= end) {
+                              const dayNum = current.getDay();
+                              // skip weekends conceptually if needed, or just map all
+                              if (dayNum !== 0 && dayNum !== 6) {
+                                const dStr = current.toISOString().split('T')[0];
+                                if (dStr >= queryStartDate && dStr <= queryEndDate) {
+                                  if (!dateCounts[dStr]) dateCounts[dStr] = { count: 0, users: [] };
+                                  dateCounts[dStr].count++;
+                                  dateCounts[dStr].users.push(emp.name);
+
+                                  if (!deptRisk[dStr]) deptRisk[dStr] = {};
+                                  if (!deptRisk[dStr][deptName]) deptRisk[dStr][deptName] = 0;
+                                  deptRisk[dStr][deptName]++;
+                                }
+                              }
+                              current.setDate(current.getDate() + 1);
+                            }
+                          });
+
+                          const topDates = Object.entries(dateCounts)
+                            .sort((a, b) => b[1].count - a[1].count)
+                            .slice(0, 5);
+
+                          // Calculate Department Sizes
+                          const deptSizes = {};
+                          (dashboardData.allEmployees || []).forEach(e => {
+                            const dName = e.department_name || 'Sin Dept';
+                            deptSizes[dName] = (deptSizes[dName] || 0) + 1;
+                          });
+
+                          // Find high risk department days (where > 30% of dept is absent)
+                          const highRiskAlerts = [];
+                          Object.entries(deptRisk).forEach(([dateStr, depts]) => {
+                            Object.entries(depts).forEach(([dName, absentCount]) => {
+                              const total = deptSizes[dName] || 1;
+                              const ratio = absentCount / total;
+                              if (ratio >= 0.3 && absentCount > 1) {
+                                highRiskAlerts.push({ date: dateStr, dept: dName, absent: absentCount, total, ratio });
+                              }
+                            });
+                          });
+                          highRiskAlerts.sort((a,b) => b.ratio - a.ratio);
+
+                          return (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', gap: '1.5rem' }}>
+                                {/* TOP DATES */}
+                                <div className="glass-panel" style={{ padding: '1.5rem' }}>
+                                  <h3 style={{ fontSize: '1.1rem', fontWeight: 'bold', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.75rem', marginBottom: '1.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                    <span>🔥</span> Fechas Críticas (Más Ausencias)
+                                  </h3>
+                                  {topDates.length === 0 ? (
+                                    <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)', fontStyle: 'italic' }}>Sin datos de ausencia en este rango de fechas.</div>
+                                  ) : (
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                                      {topDates.map(([dStr, data], idx) => {
+                                        const dObj = new Date(dStr);
+                                        const formattedDate = dObj.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' });
+                                        return (
+                                          <div key={dStr} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.75rem', background: 'rgba(255,255,255,0.02)', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
+                                            <div>
+                                              <div style={{ fontWeight: 'bold', textTransform: 'capitalize', color: idx === 0 ? '#ef4444' : 'var(--text-primary)' }}>{formattedDate}</div>
+                                              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
+                                                {data.users.slice(0, 3).join(', ')}{data.users.length > 3 ? ` y ${data.users.length - 3} más` : ''}
+                                              </div>
+                                            </div>
+                                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: idx === 0 ? 'rgba(239,68,68,0.1)' : 'rgba(255,255,255,0.05)', color: idx === 0 ? '#ef4444' : 'var(--text-primary)', width: '40px', height: '40px', borderRadius: '8px', fontWeight: 'bold' }}>
+                                              {data.count}
+                                            </div>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
+                                </div>
+
+                                {/* HIGH RISK ALERTS */}
+                                <div className="glass-panel" style={{ padding: '1.5rem', borderLeft: highRiskAlerts.length > 0 ? '4px solid #f59e0b' : '1px solid var(--border-color)' }}>
+                                  <h3 style={{ fontSize: '1.1rem', fontWeight: 'bold', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.75rem', marginBottom: '1.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                    <span>⚠️</span> Alertas de Cobertura (Riesgo por Dept)
+                                  </h3>
+                                  {highRiskAlerts.length === 0 ? (
+                                    <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)', fontStyle: 'italic' }}>
+                                      ✅ No se detectan cuellos de botella críticos (30%+ ausencia) en ningún departamento.
+                                    </div>
+                                  ) : (
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                                      {highRiskAlerts.slice(0, 5).map((alert, idx) => {
+                                        const dObj = new Date(alert.date);
+                                        const formattedDate = dObj.toLocaleDateString('es-ES', { weekday: 'short', day: 'numeric', month: 'short' });
+                                        return (
+                                          <div key={idx} style={{ padding: '0.75rem', background: 'rgba(245, 158, 11, 0.05)', borderRadius: '10px', border: '1px solid rgba(245, 158, 11, 0.2)' }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                                              <span style={{ fontWeight: 'bold', color: '#f59e0b' }}>{alert.dept}</span>
+                                              <span style={{ fontSize: '0.8rem', fontWeight: 'bold', background: 'rgba(245, 158, 11, 0.2)', padding: '0.2rem 0.5rem', borderRadius: '4px', color: '#f59e0b' }}>
+                                                {Math.round(alert.ratio * 100)}% Ausente
+                                              </span>
+                                            </div>
+                                            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                                              El <span style={{ fontWeight: 'bold', color: 'var(--text-primary)' }}>{formattedDate}</span> faltarán {alert.absent} de {alert.total} empleados.
+                                            </div>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </div>
                     </div>
                   )}
@@ -5720,46 +6317,16 @@ export default function Dashboard() {
                           >
                             <option value="">🏢 Todos los departamentos</option>
                             {dashboardData.user.role === 'admin' ? (
-                              dashboardData.allDepartments?.map(d => (
-                                <option key={d.id} value={d.id.toString()}>{d.name}</option>
-                              ))
-                            ) : (
-                              dashboardData.managedDepartments?.map(d => (
-                                <option key={d.id} value={d.id.toString()}>{d.name}</option>
-                              ))
-                            )}
-                          </select>
-                        </div>
-                      )}
-
-                      {/* Team Filter for Planning view */}
-                      {(dashboardData.user.role === 'admin' || dashboardData.user.role === 'coordinator') && (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                          <select
-                            id="planificacion_team_filter"
-                            name="planificacion_team_filter"
-                            className="selector-dropdown"
-                            style={{ padding: '0.35rem 0.75rem', fontSize: '0.9rem', borderRadius: '8px' }}
-                            value={schedTeamFilter}
-                            onChange={e => setSchedTeamFilter(e.target.value)}
-                          >
-                            <option value="">🧩 Todos los equipos</option>
-                            {dashboardData.user.role === 'admin' ? (
-                              dashboardData.allTeams
-                                ?.filter(t => !schedDeptFilter || t.department_id?.toString() === schedDeptFilter)
-                                ?.map(t => (
-                                  <option key={t.id} value={t.id.toString()}>{t.name}</option>
+                              dashboardData.allDepartments
+                                ?.filter(d => d.show_in_planning !== false)
+                                ?.map(d => (
+                                  <option key={d.id} value={d.id.toString()}>{d.name}</option>
                                 ))
                             ) : (
-                              dashboardData.allTeams
-                                ?.filter(t => {
-                                  const managedIds = dashboardData.user.managed_department_ids || [];
-                                  const matchesManaged = managedIds.includes(t.department_id);
-                                  const matchesDept = !schedDeptFilter || t.department_id?.toString() === schedDeptFilter;
-                                  return matchesManaged && matchesDept;
-                                })
-                                ?.map(t => (
-                                  <option key={t.id} value={t.id.toString()}>{t.name}</option>
+                              dashboardData.managedDepartments
+                                ?.filter(d => d.show_in_planning !== false)
+                                ?.map(d => (
+                                  <option key={d.id} value={d.id.toString()}>{d.name}</option>
                                 ))
                             )}
                           </select>
@@ -5981,6 +6548,12 @@ export default function Dashboard() {
                               list.push(...dashboardData.colleagues);
                             }
                           }
+
+                          // Exclude employees in departments that have show_in_planning = false
+                          const hiddenDeptIds = (dashboardData.allDepartments || [])
+                            .filter(d => d.show_in_planning === false)
+                            .map(d => d.id);
+                          list = list.filter(emp => !emp.department_id || !hiddenDeptIds.includes(emp.department_id));
 
                           // Filter list using search bar
                           list = list.filter(emp => 
@@ -8412,133 +8985,270 @@ export default function Dashboard() {
                 </div>
 
                 {/* Recent Transactions History */}
+                {/* Recent Transactions History & Requests History Tabs */}
                 {editingEmployee && (
                   <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '1.25rem' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <div style={{ fontSize: '0.85rem', fontWeight: '800', color: 'var(--text-secondary)', letterSpacing: '0.5px' }}>
-                          HISTORIAL RECIENTE
-                        </div>
-                        {processedTimeRecords.length > 0 && (
-                          <select
-                            className="selector-dropdown"
-                            style={{ width: 'auto', padding: '0.2rem 0.5rem', fontSize: '0.75rem', borderRadius: '8px' }}
-                            value={historyYearFilter}
-                            onChange={e => setHistoryYearFilter(e.target.value)}
-                          >
-                            {uniqueYears.map(yr => (
-                              <option key={yr} value={yr}>
-                                {yr === 'all' ? '📅 Todos' : yr}
-                              </option>
-                            ))}
-                          </select>
-                        )}
-                      </div>
+                    {/* Tab Navigation */}
+                    <div style={{ display: 'flex', gap: '0.5rem', borderBottom: '1px solid var(--border-color)', marginBottom: '1.25rem', paddingBottom: '0.25rem' }}>
                       <button
                         type="button"
-                        className="btn btn-danger"
-                        style={{ padding: '0.25rem 0.65rem', fontSize: '0.75rem', borderRadius: '8px' }}
-                        onClick={() => deleteAllEmployeeRecords(editingEmployee.id)}
+                        onClick={() => setEmployeeProfileTab('transactions')}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          borderBottom: employeeProfileTab === 'transactions' ? '2px solid var(--primary-light)' : '2px solid transparent',
+                          color: employeeProfileTab === 'transactions' ? 'var(--primary-light)' : 'var(--text-secondary)',
+                          padding: '0.5rem 1rem',
+                          fontWeight: '600',
+                          fontSize: '0.85rem',
+                          cursor: 'pointer'
+                        }}
                       >
-                        💥 Limpiar Todo (Sin alterar saldos)
+                        ⏱ Historial Ajustes/Saldos
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setEmployeeProfileTab('requests')}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          borderBottom: employeeProfileTab === 'requests' ? '2px solid var(--primary-light)' : '2px solid transparent',
+                          color: employeeProfileTab === 'requests' ? 'var(--primary-light)' : 'var(--text-secondary)',
+                          padding: '0.5rem 1rem',
+                          fontWeight: '600',
+                          fontSize: '0.85rem',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        📋 Historial de Solicitudes
                       </button>
                     </div>
-                    {filteredTimeRecords.length === 0 ? (
-                      <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', fontStyle: 'italic', padding: '0.5rem' }}>
-                        Sin movimientos registrados para este colaborador.
-                      </p>
-                    ) : (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem', maxHeight: '180px', overflowY: 'auto', paddingRight: '0.25rem' }}>
-                        {filteredTimeRecords.map(rec => (
-                          <div 
-                            key={rec.id} 
-                            onClick={() => setSelectedTimeRecord(rec)}
-                            style={{ 
-                              padding: '0.65rem 0.85rem', 
-                              backgroundColor: 'rgba(255,255,255,0.01)',
-                              border: '1px solid var(--border-color)',
-                              borderRadius: '10px', 
-                              fontSize: '0.82rem',
-                              display: 'flex',
-                              flexDirection: 'column',
-                              gap: '0.2rem',
-                              cursor: 'pointer',
-                              transition: 'background-color 0.2s ease'
-                            }}
-                            onMouseEnter={e => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.05)'}
-                            onMouseLeave={e => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.01)'}
-                          >
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                              <span style={{ fontWeight: '700' }}>{rec.type === 'vacation' ? '🏖 Ajuste Vacaciones' : '⏱ Ajuste Horas'}</span>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                <span style={{ 
-                                  fontWeight: '800', 
-                                  color: parseFloat(rec.amount) > 0 ? 'var(--success)' : 'var(--danger)' 
-                                }}>
-                                  {parseFloat(rec.amount) > 0 ? `+${rec.amount}` : rec.amount}
-                                  {rec.type === 'vacation' ? 'd' : 'h'}
-                                </span>
 
-                                {dashboardData?.user?.role === 'admin' && (
-                                  <button
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setRecordToDelete(rec);
-                                      setShowDeleteConfirmModal(true);
-                                    }}
-                                    style={{
-                                      background: 'none',
-                                      border: 'none',
-                                      color: 'var(--danger)',
-                                      cursor: 'pointer',
-                                      padding: '0.2rem',
-                                      display: 'flex',
-                                      alignItems: 'center',
-                                      justifyContent: 'center',
-                                      borderRadius: '4px'
-                                    }}
-                                    title="Eliminar Registro"
-                                  >
-                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ transition: 'transform 0.2s' }} onMouseEnter={e => e.currentTarget.style.transform = 'scale(1.2)'} onMouseLeave={e => e.currentTarget.style.transform = 'scale(1)'}>
-                                      <polyline points="3 6 5 6 21 6"></polyline>
-                                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                                    </svg>
-                                  </button>
-                                )}
-                              </div>
+                    {/* Tab Content 1: Transactions */}
+                    {employeeProfileTab === 'transactions' && (
+                      <div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <div style={{ fontSize: '0.85rem', fontWeight: '800', color: 'var(--text-secondary)', letterSpacing: '0.5px' }}>
+                              MOVIMIENTOS DE SALDOS
                             </div>
-                            <div style={{ color: 'var(--text-secondary)', fontStyle: 'italic', fontSize: '0.78rem' }}>
-                              "{rec.observation}"
-                            </div>
-                            
-                            <div style={{ 
-                              display: 'flex', 
-                              gap: '0.35rem', 
-                              fontSize: '0.72rem', 
-                              backgroundColor: 'rgba(255, 255, 255, 0.02)', 
-                              padding: '0.2rem 0.4rem', 
-                              borderRadius: '4px', 
-                              border: '1px solid var(--border-color)',
-                              margin: '0.15rem 0',
-                              color: 'var(--text-secondary)',
-                              flexWrap: 'wrap'
-                            }}>
-                              <span><strong>Previo:</strong> {parseFloat(rec.balanceBefore).toFixed(1)}{rec.type === 'vacation' ? 'd' : 'h'}</span>
-                              <span style={{ color: 'var(--text-muted)' }}>➔</span>
-                              <span><strong>Mov:</strong> {parseFloat(rec.amount) > 0 ? `+${parseFloat(rec.amount).toFixed(1)}` : parseFloat(rec.amount).toFixed(1)}{rec.type === 'vacation' ? 'd' : 'h'}</span>
-                              <span style={{ color: 'var(--text-muted)' }}>➔</span>
-                              <span><strong>Saldo:</strong> <strong style={{ color: 'var(--text-primary)' }}>{parseFloat(rec.balanceAfter).toFixed(1)}{rec.type === 'vacation' ? 'd' : 'h'}</strong></span>
-                            </div>
-
-                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                              <span>Registrado por: {rec.creator_name || 'Sistema'}</span>
-                              <span>{new Date(rec.created_at).toLocaleDateString('es-ES')}</span>
-                            </div>
+                            {processedTimeRecords.length > 0 && (
+                              <select
+                                className="selector-dropdown"
+                                style={{ width: 'auto', padding: '0.2rem 0.5rem', fontSize: '0.75rem', borderRadius: '8px' }}
+                                value={historyYearFilter}
+                                onChange={e => setHistoryYearFilter(e.target.value)}
+                              >
+                                {uniqueYears.map(yr => (
+                                  <option key={yr} value={yr}>
+                                    {yr === 'all' ? '📅 Todos' : yr}
+                                  </option>
+                                ))}
+                              </select>
+                            )}
                           </div>
-                        ))}
+                          <button
+                            type="button"
+                            className="btn btn-danger"
+                            style={{ padding: '0.25rem 0.65rem', fontSize: '0.75rem', borderRadius: '8px' }}
+                            onClick={() => deleteAllEmployeeRecords(editingEmployee.id)}
+                          >
+                            💥 Limpiar Todo (Sin alterar saldos)
+                          </button>
+                        </div>
+                        {filteredTimeRecords.length === 0 ? (
+                          <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', fontStyle: 'italic', padding: '0.5rem' }}>
+                            Sin movimientos registrados para este colaborador.
+                          </p>
+                        ) : (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem', maxHeight: '200px', overflowY: 'auto', paddingRight: '0.25rem' }}>
+                            {filteredTimeRecords.map(rec => (
+                              <div 
+                                key={rec.id} 
+                                onClick={() => setSelectedTimeRecord(rec)}
+                                style={{ 
+                                  padding: '0.65rem 0.85rem', 
+                                  backgroundColor: 'rgba(255,255,255,0.01)',
+                                  border: '1px solid var(--border-color)',
+                                  borderRadius: '10px', 
+                                  fontSize: '0.82rem',
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  gap: '0.2rem',
+                                  cursor: 'pointer',
+                                  transition: 'background-color 0.2s ease'
+                                }}
+                                onMouseEnter={e => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.05)'}
+                                onMouseLeave={e => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.01)'}
+                              >
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                  <span style={{ fontWeight: '700' }}>{rec.type === 'vacation' ? '🏖 Ajuste Vacaciones' : '⏱ Ajuste Horas'}</span>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                    <span style={{ 
+                                      fontWeight: '800', 
+                                      color: parseFloat(rec.amount) > 0 ? 'var(--success)' : 'var(--danger)' 
+                                    }}>
+                                      {parseFloat(rec.amount) > 0 ? `+${rec.amount}` : rec.amount}
+                                      {rec.type === 'vacation' ? 'd' : 'h'}
+                                    </span>
+
+                                    {dashboardData?.user?.role === 'admin' && (
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setRecordToDelete(rec);
+                                          setShowDeleteConfirmModal(true);
+                                        }}
+                                        style={{
+                                          background: 'none',
+                                          border: 'none',
+                                          color: 'var(--danger)',
+                                          cursor: 'pointer',
+                                          padding: '0.2rem',
+                                          display: 'flex',
+                                          alignItems: 'center',
+                                          justifyContent: 'center',
+                                          borderRadius: '4px'
+                                        }}
+                                        title="Eliminar Registro"
+                                      >
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ transition: 'transform 0.2s' }} onMouseEnter={e => e.currentTarget.style.transform = 'scale(1.2)'} onMouseLeave={e => e.currentTarget.style.transform = 'scale(1)'}>
+                                          <polyline points="3 6 5 6 21 6"></polyline>
+                                          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                                        </svg>
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                                <div style={{ color: 'var(--text-secondary)', fontStyle: 'italic', fontSize: '0.78rem' }}>
+                                  "{rec.observation}"
+                                </div>
+                                
+                                <div style={{ 
+                                  display: 'flex', 
+                                  gap: '0.35rem', 
+                                  fontSize: '0.72rem', 
+                                  backgroundColor: 'rgba(255, 255, 255, 0.02)', 
+                                  padding: '0.2rem 0.4rem', 
+                                  borderRadius: '4px', 
+                                  border: '1px solid var(--border-color)',
+                                  margin: '0.15rem 0',
+                                  color: 'var(--text-secondary)',
+                                  flexWrap: 'wrap'
+                                }}>
+                                  <span><strong>Previo:</strong> {parseFloat(rec.balanceBefore).toFixed(1)}{rec.type === 'vacation' ? 'd' : 'h'}</span>
+                                  <span style={{ color: 'var(--text-muted)' }}>➔</span>
+                                  <span><strong>Mov:</strong> {parseFloat(rec.amount) > 0 ? `+${parseFloat(rec.amount).toFixed(1)}` : parseFloat(rec.amount).toFixed(1)}{rec.type === 'vacation' ? 'd' : 'h'}</span>
+                                  <span style={{ color: 'var(--text-muted)' }}>➔</span>
+                                  <span><strong>Saldo:</strong> <strong style={{ color: 'var(--text-primary)' }}>{parseFloat(rec.balanceAfter).toFixed(1)}{rec.type === 'vacation' ? 'd' : 'h'}</strong></span>
+                                </div>
+
+                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                  <span>Registrado por: {rec.creator_name || 'Sistema'}</span>
+                                  <span>{new Date(rec.created_at).toLocaleDateString('es-ES')}</span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     )}
+
+                    {/* Tab Content 2: Requests */}
+                    {employeeProfileTab === 'requests' && (() => {
+                      const empId = editingEmployee.id;
+                      const allReqs = [
+                        ...(dashboardData.allPendingRequests || []),
+                        ...(dashboardData.allResolvedRequests || []),
+                        ...(dashboardData.teamPendingRequests || []),
+                        ...(dashboardData.teamResolvedRequests || []),
+                        ...(dashboardData.pendingRequests || []),
+                        ...(dashboardData.resolvedRequests || [])
+                      ];
+                      const seen = new Set();
+                      const empReqs = [];
+                      for (const req of allReqs) {
+                        if (req.employee_id === empId && !seen.has(req.id)) {
+                          seen.add(req.id);
+                          empReqs.push(req);
+                        }
+                      }
+                      empReqs.sort((a, b) => {
+                        const dateA = a.resolved_at ? new Date(a.resolved_at) : new Date(a.created_at);
+                        const dateB = b.resolved_at ? new Date(b.resolved_at) : new Date(b.created_at);
+                        return dateB - dateA;
+                      });
+
+                      return (
+                        <div>
+                          <div style={{ fontSize: '0.85rem', fontWeight: '800', color: 'var(--text-secondary)', letterSpacing: '0.5px', marginBottom: '1rem' }}>
+                            SOLICITUDES DE VACACIONES Y HORAS
+                          </div>
+                          {empReqs.length === 0 ? (
+                            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', fontStyle: 'italic', padding: '0.5rem' }}>
+                              Sin solicitudes registradas para este colaborador.
+                            </p>
+                          ) : (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem', maxHeight: '200px', overflowY: 'auto', paddingRight: '0.25rem' }}>
+                              {empReqs.map(req => {
+                                const isAbsence = req.type === 'absence';
+                                const statusColor = req.status === 'approved' ? 'var(--success)' : req.status === 'rejected' ? '#ef4444' : '#fbbf24';
+                                const statusText = req.status === 'approved' ? 'Aprobada' : req.status === 'rejected' ? 'Rechazada' : 'Pendiente';
+                                
+                                return (
+                                  <div 
+                                    key={req.id} 
+                                    style={{ 
+                                      padding: '0.65rem 0.85rem', 
+                                      backgroundColor: 'rgba(255,255,255,0.01)',
+                                      border: '1px solid var(--border-color)',
+                                      borderRadius: '10px', 
+                                      fontSize: '0.82rem',
+                                      display: 'flex',
+                                      flexDirection: 'column',
+                                      gap: '0.2rem'
+                                    }}
+                                  >
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                      <span style={{ fontWeight: '700' }}>
+                                        {isAbsence ? `🏖 Solicitud Vacaciones` : `⏱ Solicitud Horas`}
+                                      </span>
+                                      <span style={{ 
+                                        fontSize: '0.75rem', 
+                                        fontWeight: 'bold', 
+                                        color: statusColor,
+                                        padding: '0.1rem 0.4rem',
+                                        borderRadius: '4px',
+                                        background: 'rgba(255,255,255,0.05)'
+                                      }}>
+                                        {statusText}
+                                      </span>
+                                    </div>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
+                                      <span>Cantidad: <strong>{req.amount} {isAbsence ? 'días' : 'horas'}</strong></span>
+                                      <span>Creado el: {new Date(req.created_at).toLocaleDateString('es-ES')}</span>
+                                    </div>
+                                    <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                                      {isAbsence ? (
+                                        <span>Fechas: {new Date(req.start_date).toLocaleDateString('es-ES')} a {new Date(req.end_date).toLocaleDateString('es-ES')}</span>
+                                      ) : (
+                                        <span>Día libre: {req.start_date ? new Date(req.start_date).toLocaleDateString('es-ES') : '-'}</span>
+                                      )}
+                                    </div>
+                                    {req.observation && (
+                                      <div style={{ fontSize: '0.78rem', fontStyle: 'italic', color: 'var(--text-muted)', marginTop: '0.1rem' }}>
+                                        "{req.observation}"
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
                 )}
 
@@ -8624,6 +9334,19 @@ export default function Dashboard() {
                       </option>
                     ))}
                   </select>
+                </div>
+
+                <div className="form-group" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '1rem' }}>
+                  <input 
+                    type="checkbox" 
+                    id="dept_show_in_planning"
+                    checked={deptForm.show_in_planning} 
+                    onChange={e => setDeptForm({...deptForm, show_in_planning: e.target.checked})} 
+                    style={{ width: 'auto', margin: 0, transform: 'scale(1.2)' }}
+                  />
+                  <label htmlFor="dept_show_in_planning" className="form-label" style={{ margin: 0, cursor: 'pointer', fontWeight: 'normal' }}>
+                    Mostrar este departamento en planificación
+                  </label>
                 </div>
               </div>
               <div className="panel-header" style={{ borderBottom: 'none', borderTop: '1px solid var(--border-color)', justifyContent: 'flex-end', gap: '0.75rem' }}>
