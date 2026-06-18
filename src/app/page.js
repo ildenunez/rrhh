@@ -194,6 +194,9 @@ export default function Dashboard() {
   const [holidayForm, setHolidayForm] = useState({ name: '', date: '' });
   const [rrhhSubTab, setRrhhSubTab] = useState('absence_types'); // 'absence_types' | 'shifts' | 'holidays'
   const [announcementForm, setAnnouncementForm] = useState({ title: '', content: '' });
+  const [reqToDelete, setReqToDelete] = useState(null);
+  const [showDeleteReqConfirmModal, setShowDeleteReqConfirmModal] = useState(false);
+  const [refundBalanceOnDelete, setRefundBalanceOnDelete] = useState(true);
   const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
   const [recordToDelete, setRecordToDelete] = useState(null);
   const [isLightTheme, setIsLightTheme] = useState(false);
@@ -1816,6 +1819,35 @@ export default function Dashboard() {
       await refreshData();
     } catch (err) {
       alert(err.message);
+    }
+  };
+
+  const handleDeleteRequest = async () => {
+    if (!reqToDelete) return;
+    try {
+      setLoading(true);
+      const res = await fetch(`/api/requests?id=${reqToDelete.id}&refund=${refundBalanceOnDelete}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        await refreshData();
+        if (editingEmployee) {
+          const empRes = await fetch(`/api/employees?id=${editingEmployee.id}`);
+          if (empRes.ok) {
+            const empData = await empRes.json();
+            setEditingEmployee(empData);
+          }
+        }
+      } else {
+        const errorData = await res.json();
+        setError(errorData.error || "Error al eliminar solicitud");
+      }
+    } catch (err) {
+      setError("Error de red al eliminar solicitud");
+    } finally {
+      setLoading(false);
+      setShowDeleteReqConfirmModal(false);
+      setReqToDelete(null);
     }
   };
 
@@ -7947,6 +7979,119 @@ export default function Dashboard() {
         </div>
       )}
 
+      {/* Custom Delete Request Confirmation Modal */}
+      {showDeleteReqConfirmModal && reqToDelete && (
+        <div className="modal-overlay" style={{ zIndex: 1200 }}>
+          <div className="modal-content" style={{ maxWidth: '480px', width: '90%', borderRadius: '24px', overflow: 'hidden', padding: '1.5rem', background: 'var(--bg-modal)', border: '1px solid var(--border-color)', boxShadow: '0 10px 40px rgba(0,0,0,0.5)' }}>
+            
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '40px', height: '40px', borderRadius: '12px', backgroundColor: 'rgba(239, 68, 68, 0.1)', color: '#ef4444' }}>
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="3 6 5 6 21 6"></polyline>
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                  </svg>
+                </div>
+                <h3 style={{ fontSize: '1.1rem', fontWeight: '800', margin: 0, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-primary)' }}>Eliminar Solicitud</h3>
+              </div>
+              <button 
+                type="button" 
+                style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', fontSize: '1.2rem', cursor: 'pointer', padding: '0.25rem' }} 
+                onClick={() => { setShowDeleteReqConfirmModal(false); setReqToDelete(null); }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="glass-panel" style={{ padding: '1rem', background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-color)', borderRadius: '16px', marginBottom: '1.5rem' }}>
+              <div style={{ fontSize: '0.7rem', fontWeight: 'bold', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '0.5rem' }}>
+                SOLICITUD A ELIMINAR
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div>
+                  <div style={{ fontWeight: 'bold', fontSize: '1.15rem', color: 'var(--text-primary)' }}>
+                    {reqToDelete.type === 'absence' ? 'Vacaciones' : 'Horas Libres / Registro'}
+                  </div>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+                    {new Date(reqToDelete.created_at).toLocaleDateString('es-ES')}
+                  </div>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontWeight: '800', fontSize: '1.2rem', color: 'var(--danger)' }}>
+                    {reqToDelete.amount} {reqToDelete.type === 'absence' ? 'd' : 'h'}
+                  </div>
+                </div>
+              </div>
+              {reqToDelete.observation && (
+                <div style={{ fontSize: '0.85rem', fontStyle: 'italic', color: 'var(--text-secondary)', marginTop: '0.5rem', paddingTop: '0.5rem', borderTop: '1px dashed var(--border-color)' }}>
+                  "{reqToDelete.observation}"
+                </div>
+              )}
+            </div>
+
+            <div style={{ marginBottom: '1.5rem', padding: '1rem', background: 'rgba(255,255,255,0.02)', borderRadius: '12px', border: '1px solid var(--border-color)' }}>
+              <p style={{ margin: '0 0 1rem 0', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                Selecciona cómo deseas procesar la eliminación de esta solicitud:
+              </p>
+              
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem', cursor: 'pointer', padding: '0.5rem', borderRadius: '8px', background: refundBalanceOnDelete ? 'rgba(var(--primary-rgb), 0.1)' : 'transparent', border: refundBalanceOnDelete ? '1px solid var(--primary-glow)' : '1px solid transparent', transition: 'all 0.2s' }}>
+                  <input 
+                    type="radio" 
+                    name="deleteReqType"
+                    checked={refundBalanceOnDelete} 
+                    onChange={() => setRefundBalanceOnDelete(true)}
+                    style={{ marginTop: '0.2rem', accentColor: 'var(--primary)' }}
+                  />
+                  <div>
+                    <div style={{ fontWeight: 'bold', fontSize: '0.9rem', color: 'var(--text-primary)' }}>Eliminar y Devolver Saldo</div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
+                      Restaura los saldos asociados al empleado y/o a los registros históricos específicos que fueron afectados. (Recomendado)
+                    </div>
+                  </div>
+                </label>
+                
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem', cursor: 'pointer', padding: '0.5rem', borderRadius: '8px', background: !refundBalanceOnDelete ? 'rgba(239, 68, 68, 0.1)' : 'transparent', border: !refundBalanceOnDelete ? '1px solid rgba(239, 68, 68, 0.2)' : '1px solid transparent', transition: 'all 0.2s' }}>
+                  <input 
+                    type="radio" 
+                    name="deleteReqType"
+                    checked={!refundBalanceOnDelete} 
+                    onChange={() => setRefundBalanceOnDelete(false)}
+                    style={{ marginTop: '0.2rem', accentColor: 'var(--danger)' }}
+                  />
+                  <div>
+                    <div style={{ fontWeight: 'bold', fontSize: '0.9rem', color: 'var(--text-primary)' }}>Eliminación Silenciosa</div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
+                      Elimina el registro de la solicitud pero <strong>NO</strong> modifica ningún saldo actual del empleado.
+                    </div>
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
+              <button 
+                type="button" 
+                className="btn btn-secondary" 
+                style={{ padding: '0.65rem 1.2rem', fontSize: '0.9rem' }}
+                onClick={() => { setShowDeleteReqConfirmModal(false); setReqToDelete(null); }}
+              >
+                Cancelar
+              </button>
+              <button 
+                type="button" 
+                className="btn btn-danger" 
+                style={{ padding: '0.65rem 1.2rem', fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                onClick={handleDeleteRequest}
+                disabled={loading}
+              >
+                {loading ? 'Eliminando...' : 'Eliminar Permanentemente'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Custom Delete Confirmation Modal */}
       {showDeleteConfirmModal && recordToDelete && (
         <div className="modal-overlay" style={{ zIndex: 1200 }}>
@@ -9206,10 +9351,11 @@ export default function Dashboard() {
                                       borderRadius: '10px', 
                                       fontSize: '0.82rem',
                                       display: 'flex',
-                                      flexDirection: 'column',
-                                      gap: '0.2rem'
+                                      flexDirection: 'row',
+                                      justifyContent: 'space-between'
                                     }}
                                   >
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem', flex: 1 }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                       <span style={{ fontWeight: '700' }}>
                                         {isAbsence ? `🏖 Solicitud Vacaciones` : `⏱ Solicitud Horas`}
@@ -9236,11 +9382,48 @@ export default function Dashboard() {
                                         <span>Día libre: {req.start_date ? new Date(req.start_date).toLocaleDateString('es-ES') : '-'}</span>
                                       )}
                                     </div>
-                                    {req.observation && (
-                                      <div style={{ fontSize: '0.78rem', fontStyle: 'italic', color: 'var(--text-muted)', marginTop: '0.1rem' }}>
-                                        "{req.observation}"
-                                      </div>
+                                      {req.observation && (
+                                        <div style={{ fontSize: '0.78rem', fontStyle: 'italic', color: 'var(--text-muted)', marginTop: '0.1rem' }}>
+                                          "{req.observation}"
+                                        </div>
+                                      )}
+                                    </div>
+
+                                    {/* Delete Request Button (Admin only) */}
+                                    {dashboardData?.user?.role === 'admin' && (
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setReqToDelete(req);
+                                          setShowDeleteReqConfirmModal(true);
+                                          setRefundBalanceOnDelete(true); // Default to refund
+                                        }}
+                                        style={{
+                                          background: 'rgba(239, 68, 68, 0.1)',
+                                          border: '1px solid rgba(239, 68, 68, 0.2)',
+                                          color: 'var(--danger)',
+                                          cursor: 'pointer',
+                                          padding: '0.3rem',
+                                          display: 'flex',
+                                          alignItems: 'center',
+                                          justifyContent: 'center',
+                                          borderRadius: '6px',
+                                          marginLeft: '0.5rem',
+                                          transition: 'all 0.2s',
+                                          alignSelf: 'center'
+                                        }}
+                                        title="Eliminar Solicitud"
+                                        onMouseEnter={e => e.currentTarget.style.background = 'rgba(239, 68, 68, 0.2)'}
+                                        onMouseLeave={e => e.currentTarget.style.background = 'rgba(239, 68, 68, 0.1)'}
+                                      >
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                          <polyline points="3 6 5 6 21 6"></polyline>
+                                          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                                        </svg>
+                                      </button>
                                     )}
+
                                   </div>
                                 );
                               })}

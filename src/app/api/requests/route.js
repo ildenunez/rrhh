@@ -417,3 +417,53 @@ async function checkAndSimulateEmail(eventKey, requestDetails) {
     console.error("Error in checkAndSimulateEmail:", err);
   }
 }
+
+// Delete request
+export async function DELETE(request) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const id = searchParams.get('id');
+    const refund = searchParams.get('refund') === 'true';
+
+    if (!id) {
+      return NextResponse.json({ error: "Faltan parámetros (id)" }, { status: 400 });
+    }
+
+    const parsedId = parseInt(id);
+
+    // Fetch the request
+    const reqRes = await query(`SELECT * FROM requests WHERE id = $1`, [parsedId]);
+    if (reqRes.rows.length === 0) {
+      return NextResponse.json({ error: "Solicitud no encontrada" }, { status: 404 });
+    }
+
+    const reqData = reqRes.rows[0];
+
+    // Delete associated time records first (those created upon approval or as history)
+    await query(`DELETE FROM time_records WHERE request_id = $1`, [parsedId]);
+
+    // If refund is requested, restore the balances IF the request was actually taking balance
+    // Note: If a request is rejected, its balances were already restored, so we shouldn't restore them twice.
+    if (refund && reqData.status !== 'rejected') {
+      // The function applyRequestBalanceChanges handles restoring correctly, including exact record amounts
+      await applyRequestBalanceChanges(reqData, null, 'restore');
+    }
+
+    // Write audit log
+    await logAudit(
+      reqData.employee_id, // we don't have the exact admin's ID here unless passed, fallback to emp
+      'DELETE', 
+      'request', 
+      parsedId, 
+      `Solicitud #${parsedId} eliminada permanentemente. ¿Devolución de saldos?: ${refund ? 'SÍ' : 'NO'}.`
+    );
+
+    // Delete the actual request
+    await query(`DELETE FROM requests WHERE id = $1`, [parsedId]);
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting request:', error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+}
